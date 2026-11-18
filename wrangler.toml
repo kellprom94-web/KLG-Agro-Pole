@@ -1,0 +1,12 @@
+name = "klg-agro-pole"
+main = "worker/worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "klg-agro-pole"
+database_id = "b0c7a7f0-2219-48aa-82ec-026166f51a7e"
+
+[observability]
+enabled = true
