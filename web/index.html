@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>КЛГ Агро Поле</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+/* Layout: fixed left rail of modules, working area on the right; tables and map are the main surfaces. */
+:root{
+  --paper:#f3f5f1; --surface:#ffffff; --ink:#1c2420; --muted:#5f6b63; --line:#dde3da;
+  --accent:#2f6b4c; --accent-soft:#e3efe7; --accent-ink:#ffffff;
+  --wheat:#b9852a; --good:#2e7d4f; --warn:#b7791f; --bad:#b4413a; --info:#3a6ea5;
+  --rail:#18211c; --rail-ink:#c9d4cc; --rail-active:#2f6b4c;
+  --font:"Golos Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --r:8px; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#121714; --surface:#1a211d; --ink:#e4ebe6; --muted:#97a59c; --line:#2c3630;
+    --accent:#5fae84; --accent-soft:#213229; --accent-ink:#0f1512;
+    --wheat:#d9a54a; --good:#5fbf86; --warn:#e0a84a; --bad:#e2766e; --info:#7aa7d6;
+    --rail:#0c110e; --rail-ink:#b3c1b8; --rail-active:#2f6b4c; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#121714; --surface:#1a211d; --ink:#e4ebe6; --muted:#97a59c; --line:#2c3630;
+  --accent:#5fae84; --accent-soft:#213229; --accent-ink:#0f1512;
+  --wheat:#d9a54a; --good:#5fbf86; --warn:#e0a84a; --bad:#e2766e; --info:#7aa7d6;
+  --rail:#0c110e; --rail-ink:#b3c1b8; --rail-active:#2f6b4c; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.45}
+button,input,select,textarea{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100%}
+.rail{background:var(--rail);color:var(--rail-ink);padding:16px 10px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;overflow:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 14px;color:#fff;font-weight:700;font-size:16px}
+.brand svg{flex:none}
+.brand small{display:block;font-weight:400;font-size:11px;color:var(--rail-ink);opacity:.8}
+.rail a{display:flex;align-items:center;gap:10px;color:var(--rail-ink);text-decoration:none;padding:8px 10px;border-radius:6px;font-weight:500}
+.rail a:hover{background:rgba(255,255,255,.06)}
+.rail a.on{background:var(--rail-active);color:#fff}
+.rail .sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.55;padding:12px 10px 4px}
+.rail .season{margin-top:auto;padding:10px;border-top:1px solid rgba(255,255,255,.08);display:grid;gap:6px;font-size:12px}
+.rail .season select{background:#243029;border:1px solid #33433a;color:#fff;border-radius:6px;padding:6px}
+main{padding:20px 24px 60px;min-width:0}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.top h1{font-size:22px;margin:0;text-wrap:balance;font-weight:700}
+.top .sp{flex:1}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+.btn.sm{padding:4px 8px;font-size:12px}
+.btn:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.card h2{font-size:15px;margin:0 0 12px;font-weight:600}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums;font-weight:700}
+.kpi span{color:var(--muted);font-size:12px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600;background:color-mix(in srgb,var(--paper) 60%,var(--surface));position:sticky;top:0;white-space:nowrap}
+td.n,th.n{text-align:right;white-space:nowrap}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--accent-soft)}
+tr.grp td{background:color-mix(in srgb,var(--paper) 70%,var(--surface));font-weight:600}
+tr.sub td{font-weight:600;color:var(--muted);background:color-mix(in srgb,var(--paper) 35%,var(--surface))}
+tr:last-child td{border-bottom:0}
+.muted{color:var(--muted)}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.st-planned{background:color-mix(in srgb,var(--info) 14%,transparent);color:var(--info)}
+.st-progress{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.st-done{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+.st-cancel{background:color-mix(in srgb,var(--muted) 16%,transparent);color:var(--muted)}
+.crop{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:3px;display:inline-block;flex:none;border:1px solid rgba(0,0,0,.15)}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;min-width:60px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.filters input,.filters select,.f input,.f select,.f textarea{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 9px;min-width:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.tabs button{border:0;background:none;padding:8px 12px;cursor:pointer;color:var(--muted);font-weight:600;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+.empty{padding:28px;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--ink);font-size:15px;margin-bottom:6px}
+.map{position:relative;background:color-mix(in srgb,var(--paper) 50%,var(--surface));border:1px solid var(--line);border-radius:var(--r);overflow:hidden;height:440px;touch-action:none}
+.map svg{width:100%;height:100%;display:block;cursor:grab}
+.map svg.drag{cursor:grabbing}
+.map path{stroke:color-mix(in srgb,var(--ink) 55%,transparent);stroke-width:1;vector-effect:non-scaling-stroke;fill-opacity:.82;cursor:pointer}
+.map path:hover{fill-opacity:1;stroke:var(--ink);stroke-width:2}
+.map path.sel{stroke:var(--bad);stroke-width:3}
+.map text{fill:var(--ink);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round;pointer-events:none;font-weight:600}
+.map .ctl{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:4px}
+.map .ctl button{width:32px;height:32px;border:1px solid var(--line);background:var(--surface);border-radius:6px;cursor:pointer;font-size:16px;font-weight:600}
+.map .scale{position:absolute;left:10px;bottom:10px;font-size:11px;color:var(--muted);background:var(--surface);padding:2px 6px;border-radius:4px;border:1px solid var(--line)}
+.map .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);padding:6px 8px;border-radius:6px;font-size:12px;display:none;max-width:240px;z-index:2}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12px}
+.overlay{position:fixed;inset:0;background:rgba(10,15,12,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:20}
+.modal{background:var(--surface);border-radius:10px;border:1px solid var(--line);width:min(720px,100%);box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal.wide{width:min(980px,100%)}
+.modal header{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);gap:10px}
+.modal header h3{margin:0;font-size:16px;flex:1}
+.modal .body{padding:16px 18px;display:grid;gap:14px}
+.modal footer{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--line);flex-wrap:wrap}
+.modal footer .sp{flex:1}
+.f{display:grid;gap:10px 14px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.f label{display:grid;gap:4px;font-size:12px;color:var(--muted);font-weight:500}
+.f label.full{grid-column:1/-1}
+.f textarea{min-height:60px;resize:vertical}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px 10px;max-height:150px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:8px}
+.checks label{display:flex;gap:6px;align-items:center;color:var(--ink);font-size:13px}
+.apps{display:grid;gap:6px}
+.approw{display:grid;grid-template-columns:2fr 1fr 90px 32px;gap:6px;align-items:center}
+.approw input,.approw select{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:6px 8px;min-width:0}
+.note{font-size:12px;color:var(--muted)}
+.banner{background:color-mix(in srgb,var(--wheat) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--wheat) 40%,var(--line));border-radius:var(--r);padding:10px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.banner.err{background:color-mix(in srgb,var(--bad) 10%,var(--surface));border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+.toast{position:fixed;right:16px;bottom:16px;background:var(--ink);color:var(--surface);padding:10px 14px;border-radius:8px;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.rot td{min-width:110px}
+.chip{display:inline-flex;gap:6px;align-items:center;padding:3px 8px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:var(--surface)}
+.chip.none{color:var(--muted);font-weight:400;border-style:dashed}
+.dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+.dl dt{color:var(--muted)}
+.dl dd{margin:0;font-variant-numeric:tabular-nums}
+.menu-btn{display:none}
+.mapbox{position:relative;height:480px;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:#1d2a22}
+.mapgl{position:absolute;inset:0}
+.mtools{position:absolute;top:10px;left:10px;display:flex;gap:4px;z-index:2;flex-wrap:wrap}
+.mtools button,.drawbar button{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:600;font-size:12px}
+.mtools button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.drawbar{position:absolute;left:10px;right:10px;bottom:34px;z-index:3;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+.drawbar[hidden]{display:none}
+.drawbar span{flex:1;min-width:160px;font-size:12px}
+.drawbar button.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.maplibregl-popup-content{font-family:var(--font);font-size:12px;color:#1c2420;padding:8px 10px}
+.mapnote{position:absolute;top:50px;left:10px;z-index:2;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;max-width:280px}
+@media (max-width:900px){
+  .app{grid-template-columns:1fr}
+  .rail{position:fixed;inset:0 auto 0 0;width:240px;z-index:15;transform:translateX(-100%);transition:transform .2s}
+  .rail.open{transform:none}
+  .menu-btn{display:inline-flex}
+  main{padding:14px 16px 60px}
+  .g2,.g3{grid-template-columns:1fr}
+  .map{height:340px} .mapbox{height:380px}
+}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Розділи">
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="6" fill="#2f6b4c"/><path d="M5 20 L11 9 L15 15 L18 11 L23 20 Z" fill="#b9852a"/><path d="M5 20h18" stroke="#fff" stroke-width="2"/></svg>
+      <div>КЛГ Агро<small>Поле і техніка</small></div>
+    </div>
+    <a href="#dash" data-v="dash">Центр моніторингу</a>
+    <div class="sec">Агро</div>
+    <a href="#fields" data-v="fields">Поля і карта</a>
+    <a href="#rotation" data-v="rotation">Сівозміна</a>
+    <a href="#ops" data-v="ops">Агрооперації</a>
+    <div class="sec">Техніка</div>
+    <a href="#machines" data-v="machines">Машини</a>
+    <a href="#tasks" data-v="tasks">Завдання техніки</a>
+    <a href="#service" data-v="service">Обслуговування</a>
+    <div class="sec">Інше</div>
+    <a href="#refs" data-v="refs">Довідники</a>
+    <a href="#reports" data-v="reports">Звіти</a>
+    <div class="season">
+      <label for="seasonSel">Сезон</label>
+      <select id="seasonSel"></select>
+      <button class="btn sm" type="button" id="logoutBtn" style="background:transparent;color:var(--rail-ink);border-color:#33433a;margin-top:6px">Вийти</button>
+    </div>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="modalRoot"></div>
+<script>
+"use strict";
+/* ---------- constants ---------- */
+const CROPS = {
+  "Кукурудза":"#3b6fd8","Соняшник":"#e6d92e","Ріпак озимий":"#d38498","Пшениця озима":"#3aa05a",
+  "Пшениця яра":"#7cc489","Ячмінь озимий":"#c9a227","Ячмінь ярий":"#dcc062","Соя":"#8c6bb1","Горох":"#9ad06b",
+  "Жито озиме":"#b48a5a","Овес":"#cfb88a","Гречка":"#a0522d","Еспарцет":"#6fbfa0","Люцерна":"#4f9d8a",
+  "Гірчиця":"#f0b429","Пар":"#c8c8c8","Не вказана":"#e0e0e0"
+};
+const WORKS = {
+  "Обробка ґрунту":["Дискування","Дискування 2-й слід","Оранка","Оранка городів пайщикам","Культивація","Боронування","Коткування","Закриття вологи","Мульчування","Подрібнення","Глибоке розпушування","Розгортання валків соломи"],
+  "Внесення":["Посів","Пересів","Обприскування","Розкидання","Внесення КАСу","Внесення аміаку"],
+  "Збір врожаю":["Збір врожаю"],
+  "Інше":["Тюкування","Перевезення","Інше"]
+};
+const GROUP_COLOR = {"Обробка ґрунту":"#b9852a","Внесення":"#3a6ea5","Збір врожаю":"#2e7d4f","Інше":"#7a7a7a"};
+const STATUS = {planned:"Заплановано",progress:"В процесі",done:"Виконано",cancel:"Скасовано"};
+const PRODUCT_TYPES = ["ЗЗР","Насіння","Добрива","Паливо","Інше"];
+const UNITS = ["л","кг","т","шт","п.о."];
+const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
+const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
+const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service"];
+
+/* ---------- state ---------- */
+const S = {}; COLS.forEach(c => S[c] = []);
+const loaded = new Set();
+let db = null, canWrite = true, dbState = "loading", downloads = null;
+function lsGet(k){ try { return localStorage.getItem("klg_"+k); } catch(e){ return null; } }
+function lsSet(k,v){ try { localStorage.setItem("klg_"+k, v); } catch(e){} }
+function curSeason(){ return new Date().getFullYear(); }
+const today = () => new Date().toISOString().slice(0,10);
+const state = {
+  view: "dash",
+  season: Number(lsGet("season")) || curSeason(),
+  fieldSel: null, fieldQ: "", fieldGroup: "",
+  ops: { status:"", group:"", q:"" },
+  period: { from: new Date().getFullYear()+"-01-01", to: today() },
+  machineId: null, machQ: "",
+  refTab: "products", repTab: "machines",
+  mapVB: {}
+};
+
+/* ---------- helpers ---------- */
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => { const n = parseFloat(String(v ?? "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const fmt = (v, d=2) => (v==null || v==="" || !isFinite(v)) ? "—" : Number(v).toLocaleString("uk-UA",{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmt0 = v => fmt(v,0);
+const fdate = s => { if(!s) return "—"; const [y,m,d]=s.split("-"); return d+"."+m+"."+y.slice(2); };
+const sum = (a, f) => a.reduce((t,x)=>t+num(f(x)),0);
+const byId = (col, id) => S[col].find(x => x.id === id);
+const cropColor = c => CROPS[c] || hashColor(c || "");
+function hashColor(s){ let h=0; for(const ch of s) h=(h*31+ch.charCodeAt(0))%360; return s ? `hsl(${h}, 45%, 60%)` : "#e0e0e0"; }
+const fieldSeason = (f, s=state.season) => (f.seasons && f.seasons[s]) || {};
+const fieldCrop = (f, s) => fieldSeason(f, s).crop || "";
+const cropTag = c => c ? `<span class="crop"><i class="dot" style="background:${esc(cropColor(c))}"></i>${esc(c)}</span>` : `<span class="muted">—</span>`;
+const statusPill = s => `<span class="pill st-${esc(s||"planned")}">${esc(STATUS[s]||STATUS.planned)}</span>`;
+const nameOf = (col, id) => { const x = byId(col, id); return x ? x.name : ""; };
+function opGroup(op){ for(const g in WORKS) if(WORKS[g].includes(op.workType)) return g; return op.workGroup || "Інше"; }
+function opTitle(op){ return op.workType === "Інше" && op.customName ? op.customName : (op.workType || "—"); }
+function opTasks(op){ return S.tasks.filter(t => t.opId === op.id); }
+function opDone(op){ const ts = opTasks(op); if(ts.length) return sum(ts, t => t.area); if(op.doneArea === "" || op.doneArea == null) return op.status === "done" ? opPlanned(op) : 0; return num(op.doneArea); }
+function opPlanned(op){ return num(op.plannedArea) || num((byId("fields", op.fieldId)||{}).area); }
+function inPeriod(d){ return d && d >= state.period.from && d <= state.period.to; }
+function hoursOf(t){ if(t.hours) return num(t.hours); if(!t.start||!t.end) return 0; const [a,b]=t.start.split(":").map(Number),[c,d]=t.end.split(":").map(Number); let m=(c*60+d)-(a*60+b); if(m<0) m+=1440; return m/60; }
+function toast(msg){ const el=document.createElement("div"); el.className="toast"; el.textContent=msg; document.body.appendChild(el); setTimeout(()=>el.remove(), 2600); }
+
+/* ---------- geometry ---------- */
+function ringArea(ring){ // ring: [[lng,lat],...] → hectares
+  if(!ring || ring.length < 3) return 0;
+  const lat0 = ring.reduce((t,p)=>t+p[1],0)/ring.length * Math.PI/180;
+  const kx = 111320*Math.cos(lat0), ky = 110540;
+  let a = 0;
+  for(let i=0;i<ring.length;i++){ const p=ring[i], q=ring[(i+1)%ring.length]; a += (p[0]*kx)*(q[1]*ky) - (q[0]*kx)*(p[1]*ky); }
+  return Math.abs(a)/2/10000;
+}
+const contourArea = cs => (cs||[]).reduce((t,r)=>t+ringArea(r),0);
+
+/* ---------- data layer (Cloudflare Worker + D1) ---------- */
+let lastSync = "", pollTimer = null, authed = false;
+async function api(path, opts = {}){
+  const r = await fetch("/api" + path, Object.assign({ headers: { "content-type": "application/json" }, credentials: "same-origin" }, opts));
+  if(r.status === 401){ authed = false; showLogin(); throw { code: "auth" }; }
+  if(r.status === 503){ dbState = "nopass"; render(); throw { code: "nopass" }; }
+  if(!r.ok) throw { code: "http", message: r.status + " " + (await r.text()).slice(0, 200) };
+  return r.json();
+}
+function applyDocs(docs){
+  for(const d of docs){
+    if(!S[d.col]) continue;
+    const i = S[d.col].findIndex(x => x.id === d.id);
+    if(d.deleted){ if(i >= 0) S[d.col].splice(i, 1); }
+    else { const obj = Object.assign({ id: d.id }, d.data); if(i >= 0) S[d.col][i] = obj; else S[d.col].push(obj); }
+  }
+}
+async function initDb(){
+  try {
+    const j = await api("/all");
+    COLS.forEach(c => S[c] = []);
+    applyDocs(j.docs); lastSync = j.now; authed = true; dbState = "ready";
+    render(); startPoll();
+  } catch(e){ if(e.code === "http"){ dbState = "error"; render(); } }
+}
+function startPoll(){
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if(document.hidden || !authed) return;
+    try { const j = await api("/changes?since=" + encodeURIComponent(lastSync)); lastSync = j.now; if(j.docs.length){ applyDocs(j.docs); scheduleRender(); } } catch(e){}
+  }, 15000);
+}
+let rTimer = null;
+function scheduleRender(){ if(rTimer) return; rTimer = requestAnimationFrame(()=>{ rTimer=null; render(); }); }
+function clean(o){ const r = {}; for(const k in o){ if(k==="id") continue; const v=o[k]; if(v===undefined) continue; r[k]=v; } return r; }
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+async function save(col, obj){
+  if(!authed){ showLogin(); return null; }
+  const id = obj.id || newId();
+  const now = new Date().toISOString();
+  const data = clean(obj); data.updatedAt = now; if(!obj.id) data.createdAt = now;
+  try {
+    await api("/doc/" + col + "/" + encodeURIComponent(id), { method: "PUT", body: JSON.stringify(data) });
+    applyDocs([{ col, id, data }]); scheduleRender(); return id;
+  } catch(e){ if(e.code === "http") toast("Не вдалося зберегти: " + e.message); return null; }
+}
+async function remove(col, id){
+  if(!authed) return;
+  try { await api("/doc/" + col + "/" + encodeURIComponent(id), { method: "DELETE" }); applyDocs([{ col, id, deleted: 1 }]); scheduleRender(); }
+  catch(e){ if(e.code === "http") toast("Не вдалося видалити"); }
+}
+function showLogin(){
+  if(document.getElementById("login")) return;
+  const w = document.createElement("div"); w.id = "login"; w.className = "overlay"; w.style.zIndex = 40;
+  w.innerHTML = `<form class="modal" style="width:min(380px,100%)"><header><h3>Вхід у КЛГ Агро Поле</h3></header><div class="body"><div class="f"><label class="full">Пароль<input type="password" id="lpw" autocomplete="current-password" required></label></div><div class="note" id="lerr"></div></div><footer><span class="sp"></span><button class="btn pri" type="submit">Увійти</button></footer></form>`;
+  document.body.appendChild(w);
+  w.querySelector("form").onsubmit = async e => {
+    e.preventDefault();
+    const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: w.querySelector("#lpw").value }) });
+    if(r.ok){ w.remove(); initDb(); } else w.querySelector("#lerr").textContent = r.status === 503 ? "Пароль програми ще не задано в Cloudflare." : "Невірний пароль.";
+  };
+  w.querySelector("#lpw").focus();
+}
+
+/* ---------- modal ---------- */
+function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+function openModal({ title, body, wide, onSave, onDelete, extra, saveLabel }){
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `<div class="overlay" id="ov"><div class="modal ${wide?"wide":""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <header><h3>${esc(title)}</h3><button class="btn sm" id="mClose" type="button">Закрити</button></header>
+    <form class="body" id="mForm">${body}</form>
+    <footer>${onDelete ? `<button class="btn danger" id="mDel" type="button">Видалити</button>` : ""}${extra||""}<span class="sp"></span>
+    <button class="btn" type="button" id="mCancel">Скасувати</button>${onSave ? `<button class="btn pri" id="mSave" type="button">${esc(saveLabel||"Зберегти")}</button>`:""}</footer>
+  </div></div>`;
+  const m = root.querySelector(".modal");
+  root.querySelector("#mClose").onclick = closeModal;
+  root.querySelector("#mCancel").onclick = closeModal;
+  root.querySelector("#ov").addEventListener("mousedown", e => { if(e.target.id==="ov") closeModal(); });
+  root.querySelector("#mForm").addEventListener("submit", e => e.preventDefault());
+  if(onSave) root.querySelector("#mSave").onclick = async () => { const b=root.querySelector("#mSave"); b.disabled=true; const ok = await onSave(m); if(ok!==false) closeModal(); else b.disabled=false; };
+  if(onDelete) root.querySelector("#mDel").onclick = () => confirmBox("Видалити запис? Це не можна скасувати.", async () => { await onDelete(); closeModal(); });
+  const first = m.querySelector("input,select,textarea"); if(first) first.focus();
+  return m;
+}
+function confirmBox(text, yes){
+  const wrap = document.createElement("div");
+  wrap.className = "overlay"; wrap.style.zIndex = 25;
+  wrap.innerHTML = `<div class="modal" style="width:min(420px,100%)"><div class="body"><b>${esc(text)}</b></div><footer><span class="sp"></span><button class="btn" type="button">Ні</button><button class="btn danger" type="button">Так, видалити</button></footer></div>`;
+  document.body.appendChild(wrap);
+  const [no, ok] = wrap.querySelectorAll("button");
+  no.onclick = () => wrap.remove();
+  ok.onclick = async () => { wrap.remove(); await yes(); };
+}
+const val = (m, id) => { const el = m.querySelector("#"+id); return el ? el.value.trim() : ""; };
+const checked = (m, name) => [...m.querySelectorAll(`input[name="${name}"]:checked`)].map(x => x.value);
+const opt = (v, label, sel) => `<option value="${esc(v)}" ${String(v)===String(sel)?"selected":""}>${esc(label)}</option>`;
+const optsFrom = (arr, sel, empty) => (empty!==undefined?opt("", empty, sel):"") + arr.map(x => typeof x==="string" ? opt(x,x,sel) : opt(x.id, x.name, sel)).join("");
+const sorted = (col) => [...S[col]].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),"uk"));
+function cropDatalist(){ const set = new Set(Object.keys(CROPS)); S.fields.forEach(f => Object.values(f.seasons||{}).forEach(s => s.crop && set.add(s.crop))); return `<datalist id="cropList">${[...set].map(c=>`<option value="${esc(c)}">`).join("")}</datalist>`; }
+function groupDatalist(){ const set = new Set(S.fields.map(f=>f.group).filter(Boolean)); return `<datalist id="groupList">${[...set].map(c=>`<option value="${esc(c)}">`).join("")}</datalist>`; }
+
+/* ---------- CSV ---------- */
+function exportCsv(name, head, rows){
+  const line = r => r.map(v => { const s = String(v ?? ""); return /[;"\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; }).join(";");
+  const text = "﻿" + [head, ...rows].map(line).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+  a.download = name + ".csv"; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ---------- map (MapLibre + MapTiler) ---------- */
+const MT_KEY = "__MAPTILER_KEY__";
+const STYLES = { sat: "https://api.maptiler.com/maps/hybrid/style.json?key=" + MT_KEY, map: "https://api.maptiler.com/maps/streets-v2/style.json?key=" + MT_KEY };
+let mapStyle = lsGet("mapStyle") || "sat";
+const MAPS = {}, pendingMaps = {};
+const EMPTY_FC = { type: "FeatureCollection", features: [] };
+function mapHtml(key, fields){
+  pendingMaps[key] = fields;
+  return `<div class="mapslot" data-slot="${key}"></div>`;
+}
+function fieldsGeo(fields){
+  return { type: "FeatureCollection", features: fields.filter(f => f.contours && f.contours.length).map(f => ({ type: "Feature",
+    properties: { fid: f.id, name: f.name, color: cropColor(fieldCrop(f) || "Не вказана"), crop: fieldCrop(f) || "", variety: fieldSeason(f).variety || "", group: f.group || "", area: num(f.area) },
+    geometry: { type: "MultiPolygon", coordinates: f.contours.map(r => [r]) } })) };
+}
+function bboxOf(fields){
+  let b = null;
+  fields.forEach(f => (f.contours || []).forEach(r => r.forEach(([x, y]) => { if(!b) b = [x, y, x, y]; else { b[0] = Math.min(b[0], x); b[1] = Math.min(b[1], y); b[2] = Math.max(b[2], x); b[3] = Math.max(b[3], y); } })));
+  return b;
+}
+function addLayers(M){
+  const map = M.map;
+  if(map.getSource("fields")) return;
+  map.addSource("fields", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({ id: "f-fill", type: "fill", source: "fields", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.42 } });
+  map.addLayer({ id: "f-line", type: "line", source: "fields", paint: { "line-color": "#ffffff", "line-width": 1.4 } });
+  map.addLayer({ id: "f-sel", type: "line", source: "fields", filter: ["==", ["get", "fid"], ""], paint: { "line-color": "#ff3b30", "line-width": 3 } });
+  map.addLayer({ id: "f-lab", type: "symbol", source: "fields", minzoom: 11.5, layout: { "text-field": ["get", "name"], "text-size": 12, "text-font": ["Noto Sans Regular"], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "rgba(0,0,0,.85)", "text-halo-width": 1.4 } });
+  map.addSource("draw", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({ id: "d-fill", type: "fill", source: "draw", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#ffd60a", "fill-opacity": 0.25 } });
+  map.addLayer({ id: "d-line", type: "line", source: "draw", filter: ["!=", ["geometry-type"], "Point"], paint: { "line-color": "#ffd60a", "line-width": 2.5, "line-dasharray": [2, 1] } });
+  map.addLayer({ id: "d-pt", type: "circle", source: "draw", filter: ["==", ["geometry-type"], "Point"], paint: { "circle-radius": 5, "circle-color": "#ffd60a", "circle-stroke-color": "#000", "circle-stroke-width": 1 } });
+}
+function updateMapData(M){
+  const map = M.map;
+  const src = map.getSource && map.getSource("fields");
+  if(!src) return;
+  src.setData(fieldsGeo(M.fields));
+  map.setFilter("f-sel", ["==", ["get", "fid"], state.fieldSel || ""]);
+  updateDraw(M);
+  const note = M.el.querySelector(".mapnote");
+  const has = M.fields.some(f => f.contours && f.contours.length);
+  note.hidden = has || !!M.draw;
+  if(!M.fitted && has){ fitFields(M); M.fitted = true; }
+}
+function fitFields(M){
+  const b = bboxOf(M.fields); if(!b) return;
+  M.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 0, maxZoom: 15 });
+}
+function updateDraw(M){
+  const src = M.map.getSource("draw"); if(!src) return;
+  const pts = M.draw ? M.draw.pts : [];
+  const feats = pts.map(p => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } }));
+  if(pts.length >= 3) feats.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[...pts, pts[0]]] } });
+  else if(pts.length === 2) feats.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: pts } });
+  src.setData({ type: "FeatureCollection", features: feats });
+  const bar = M.el.querySelector(".drawbar");
+  bar.hidden = !M.draw;
+  if(M.draw) bar.querySelector("span").textContent = pts.length < 3 ? `Клацайте по краю поля, щоб ставити точки (поставлено ${pts.length}).` : `Точок: ${pts.length}, площа ≈ ${fmt(ringArea([...pts, pts[0]]))} га. Натисніть «Завершити».`;
+}
+function createMap(key){
+  const el = document.createElement("div"); el.className = "mapbox";
+  el.innerHTML = `<div class="mapgl"></div>
+    <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button></div>
+    <div class="mapnote">Контурів полів ще немає. Намалюйте поле на карті або імпортуйте KML/GeoJSON у розділі «Поля і карта».</div>
+    <div class="drawbar" hidden><span></span><button type="button" data-dundo>Крок назад</button><button type="button" data-dcancel>Скасувати</button><button type="button" class="pri" data-ddone>Завершити</button></div>`;
+  const M = { el, key, fields: [], fitted: false, draw: null };
+  if(typeof maplibregl === "undefined"){ el.querySelector(".mapgl").innerHTML = `<div class="empty" style="color:#fff">Карта не завантажилась. Перевірте інтернет і оновіть сторінку.</div>`; M.map = { getSource(){ return null; }, resize(){} }; return M; }
+  const map = new maplibregl.Map({ container: el.querySelector(".mapgl"), style: STYLES[mapStyle], center: [30.43, 48.39], zoom: 10, attributionControl: { compact: true }, dragRotate: false });
+  M.map = map;
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+  map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+  map.on("style.load", () => { addLayers(M); updateMapData(M); });
+  const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+  map.on("mousemove", "f-fill", e => {
+    if(M.draw) return;
+    map.getCanvas().style.cursor = "pointer";
+    const p = e.features[0].properties;
+    popup.setLngLat(e.lngLat).setHTML(`<b>${esc(p.name)}</b><br>${esc(p.group)} · ${fmt(Number(p.area))} га<br>${esc(p.crop || "культура не вказана")}${p.variety ? ", " + esc(p.variety) : ""}`).addTo(map);
+  });
+  map.on("mouseleave", "f-fill", () => { map.getCanvas().style.cursor = M.draw ? "crosshair" : ""; popup.remove(); });
+  map.on("click", e => {
+    if(M.draw){ M.draw.pts.push([+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)]); updateDraw(M); return; }
+    const hit = map.queryRenderedFeatures(e.point, { layers: ["f-fill"] })[0];
+    if(hit) pickField(hit.properties.fid);
+  });
+  el.querySelectorAll("[data-ms]").forEach(b => b.onclick = () => setMapStyle(b.dataset.ms));
+  el.querySelector("[data-fit]").onclick = () => fitFields(M);
+  el.querySelector("[data-dundo]").onclick = () => { if(M.draw){ M.draw.pts.pop(); updateDraw(M); } };
+  el.querySelector("[data-dcancel]").onclick = () => stopDraw(M);
+  el.querySelector("[data-ddone]").onclick = () => {
+    if(!M.draw || M.draw.pts.length < 3){ toast("Потрібно щонайменше 3 точки"); return; }
+    const ring = [...M.draw.pts, M.draw.pts[0]]; const done = M.draw.onDone; stopDraw(M); done([ring]);
+  };
+  markStyle(el);
+  return M;
+}
+function markStyle(el){ el.querySelectorAll("[data-ms]").forEach(b => b.classList.toggle("on", b.dataset.ms === mapStyle)); }
+function setMapStyle(s){
+  if(s === mapStyle) return; mapStyle = s; lsSet("mapStyle", s);
+  Object.values(MAPS).forEach(M => { if(M.map.setStyle){ M.map.setStyle(STYLES[s]); markStyle(M.el); } });
+}
+function startDraw(key, onDone){
+  const M = MAPS[key]; if(!M || !M.map.getCanvas) return;
+  M.draw = { pts: [], onDone }; M.map.getCanvas().style.cursor = "crosshair"; M.map.doubleClickZoom.disable();
+  updateMapData(M); M.el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
+function pickField(fid){ state.fieldSel = fid; if(state.view !== "fields") location.hash = "fields"; else render(); }
+function attachMaps(){
+  document.querySelectorAll(".mapslot").forEach(slot => {
+    const key = slot.dataset.slot;
+    const M = MAPS[key] || (MAPS[key] = createMap(key));
+    slot.appendChild(M.el);
+    M.fields = pendingMaps[key] || [];
+    requestAnimationFrame(() => { M.map.resize(); updateMapData(M); });
+  });
+}
+
+/* ---------- import KML / GeoJSON ---------- */
+function parseGeo(text, fname){
+  const out = [];
+  if(/\.kml$/i.test(fname) || text.trim().startsWith("<")){
+    const x = new DOMParser().parseFromString(text, "text/xml");
+    x.querySelectorAll("Placemark").forEach(pm => {
+      const name = (pm.querySelector("name")||{}).textContent || "";
+      const rings = [];
+      pm.querySelectorAll("Polygon").forEach(pg => {
+        const c = pg.querySelector("outerBoundaryIs coordinates") || pg.querySelector("coordinates");
+        if(c) rings.push(c.textContent.trim().split(/\s+/).map(t => t.split(",").map(Number)).filter(p => isFinite(p[0]) && isFinite(p[1])).map(p => [p[0], p[1]]));
+      });
+      const ext = {}; pm.querySelectorAll("ExtendedData Data, SimpleData").forEach(d => { ext[d.getAttribute("name")] = (d.querySelector("value")||d).textContent; });
+      if(rings.length) out.push({ name: name.trim() || ext.name || ext.Name || "", rings, props: ext });
+    });
+  } else {
+    const j = JSON.parse(text);
+    const feats = j.type === "FeatureCollection" ? j.features : (j.type === "Feature" ? [j] : []);
+    feats.forEach(ft => {
+      const g = ft.geometry; if(!g) return;
+      const p = ft.properties || {};
+      let rings = [];
+      if(g.type === "Polygon") rings = [g.coordinates[0]];
+      else if(g.type === "MultiPolygon") rings = g.coordinates.map(pg => pg[0]);
+      rings = rings.map(r => r.map(c => [c[0], c[1]]));
+      if(rings.length) out.push({ name: String(p.name ?? p.Name ?? p.NAME ?? p.title ?? p["Поле"] ?? "").trim(), rings, props: p });
+    });
+  }
+  return out;
+}
+function importDialog(){
+  openModal({ title: "Імпорт контурів полів", saveLabel: "Імпортувати",
+    body: `<p class="note">Файл KML або GeoJSON з контурами. Поле з такою самою назвою отримає новий контур, решта полів створяться автоматично. Площу пораховано з контуру. Більшість GIS-програм і сервісів моніторингу вміють вивантажувати поля у KML.</p>
+    <div class="f"><label class="full">Файл<input type="file" id="gFile" accept=".kml,.geojson,.json,application/vnd.google-earth.kml+xml,application/geo+json"></label>
+    <label>Група для нових полів<input id="gGroup" list="groupList" placeholder="наприклад, Голованівськ"></label>
+    <label>Культура сезону ${state.season} для нових<input id="gCrop" list="cropList" placeholder="необов’язково"></label></div>${groupDatalist()}${cropDatalist()}
+    <div id="gInfo" class="note"></div>`,
+    onSave: async (m) => {
+      const file = m.querySelector("#gFile").files[0];
+      if(!file){ m.querySelector("#gInfo").textContent = "Оберіть файл."; return false; }
+      let items;
+      try { items = parseGeo(await file.text(), file.name); } catch(e){ m.querySelector("#gInfo").textContent = "Не вдалося прочитати файл: " + e.message; return false; }
+      if(!items.length){ m.querySelector("#gInfo").textContent = "У файлі не знайдено полігонів."; return false; }
+      const group = val(m,"gGroup"), crop = val(m,"gCrop");
+      let created=0, updated=0, i=0;
+      for(const it of items){
+        i++; m.querySelector("#gInfo").textContent = `Обробка ${i} з ${items.length}…`;
+        const name = it.name || ("Поле " + i);
+        const ex = S.fields.find(f => f.name === name);
+        const area = +contourArea(it.rings).toFixed(2);
+        if(ex){ await save("fields", Object.assign({}, ex, { contours: it.rings, calcArea: area, area: num(ex.area) || area })); updated++; }
+        else { const seasons = crop ? { [state.season]: { crop } } : {}; await save("fields", { name, group, area, calcArea: area, contours: it.rings, seasons }); created++; }
+      }
+      toast(`Готово: нових полів ${created}, оновлено контурів ${updated}`);
+    }
+  });
+}
+
+/* ---------- views ---------- */
+function header(title, actions=""){ return `<div class="top"><button class="btn menu-btn" type="button" id="menuBtn" aria-label="Меню">☰</button><h1>${esc(title)}</h1><span class="sp"></span>${actions}</div>`; }
+function statusBanner(){
+  if(dbState === "loading") return `<div class="banner">Завантаження даних…</div>`;
+  if(dbState === "nopass") return `<div class="banner err">У Cloudflare ще не задано пароль програми (APP_PASSWORD).</div>`;
+  if(dbState === "error") return `<div class="banner err">Не вдалося під’єднатися до бази. Оновіть сторінку трохи згодом.</div>`;
+  return "";
+}
+function demoBanner(){
+  const hasDemo = COLS.some(c => S[c].some(x => x.demo));
+  const empty = COLS.every(c => !S[c].length);
+  if(empty && dbState === "ready") return `<div class="banner"><span>Програма порожня. Почніть з полів і техніки — або заповніть приклад, щоб подивитися, як усе працює.</span><span class="sp" style="flex:1"></span><button class="btn pri" type="button" data-act="demo">Заповнити прикладом</button></div>`;
+  if(hasDemo) return `<div class="banner"><span>Зараз у програмі є приклад даних (позначені як приклад).</span><span style="flex:1"></span><button class="btn danger" type="button" data-act="undemo">Видалити приклад</button></div>`;
+  return "";
+}
+
+function seasonFields(){ return S.fields.filter(f => !f.archived); }
+
+function viewDash(){
+  const fields = seasonFields();
+  const byCrop = {};
+  fields.forEach(f => { const s = fieldSeason(f); const c = s.crop || "Не вказана"; const o = byCrop[c] ||= { area:0, planA:0, plan:0, factA:0, fact:0 }; const a=num(f.area); o.area += a; if(num(s.plannedYield)){ o.planA+=a; o.plan += a*num(s.plannedYield)/10; } if(num(s.yield)){ o.factA+=a; o.fact += a*num(s.yield)/10; } });
+  const rows = Object.entries(byCrop).sort((a,b)=>b[1].area-a[1].area);
+  const tot = sum(fields, f=>f.area);
+  const ops = S.ops.filter(o => Number(o.season) === state.season);
+  const cnt = k => ops.filter(o => (o.status||"planned")===k).length;
+  const td = today();
+  const tasksToday = S.tasks.filter(t => t.date === td);
+  const recent = [...S.tasks].sort((a,b)=> (b.date+(b.start||"")).localeCompare(a.date+(a.start||""))).slice(0,8);
+  const overdue = S.service.filter(s => s.status !== "done" && s.date && s.date < td);
+  return header("Центр моніторингу", `<span class="muted">Сезон ${state.season}</span>`) + statusBanner() + demoBanner() + `
+  <div class="kpis">
+    <div class="kpi"><b>${fmt(tot)}</b><span>га у ${fields.length} полях</span></div>
+    <div class="kpi"><b>${ops.length}</b><span>агрооперацій · виконано ${cnt("done")}</span></div>
+    <div class="kpi"><b>${cnt("progress")}</b><span>агрооперацій в процесі</span></div>
+    <div class="kpi"><b>${S.machines.length}</b><span>машин · завдань сьогодні ${tasksToday.length}</span></div>
+    <div class="kpi"><b style="color:${overdue.length?"var(--bad)":"inherit"}">${overdue.length}</b><span>прострочених ТО</span></div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h2>Карта полів · культури ${state.season}</h2>${mapHtml("dash", fields)}${legend(fields)}</div>
+    <div class="card"><h2>Культури сезону ${state.season}</h2>
+      ${rows.length ? `<div class="tw"><table><thead><tr><th>Культура</th><th class="n">Площа, га</th><th class="n">План, ц/га</th><th class="n">План, т</th><th class="n">Факт, ц/га</th><th class="n">Урожай, т</th></tr></thead><tbody>
+      ${rows.map(([c,o]) => `<tr><td>${cropTag(c)}</td><td class="n">${fmt(o.area)}</td><td class="n">${o.planA?fmt(o.plan*10/o.planA):"—"}</td><td class="n">${o.plan?fmt0(o.plan):"—"}</td><td class="n">${o.factA?fmt(o.fact*10/o.factA):"—"}</td><td class="n">${o.fact?fmt0(o.fact):"—"}</td></tr>`).join("")}
+      <tr class="grp"><td>Разом</td><td class="n">${fmt(tot)}</td><td></td><td class="n">${fmt0(sum(rows,r=>r[1].plan))}</td><td></td><td class="n">${fmt0(sum(rows,r=>r[1].fact))}</td></tr>
+      </tbody></table></div>` : `<div class="empty"><b>Поля ще не додані</b>Додайте поля в розділі «Поля і карта».</div>`}
+    </div>
+  </div>
+  <div class="grid g2" style="margin-top:16px">
+    <div class="card"><h2>Останні завдання техніки</h2>${recent.length ? tasksTable(recent, true) : `<div class="empty">Завдань ще немає.</div>`}</div>
+    <div class="card"><h2>Прогрес агрооперацій ${state.season}</h2>${opsProgress(ops)}</div>
+  </div>`;
+}
+function legend(fields){
+  const set = {}; fields.forEach(f => { const c = fieldCrop(f) || "Не вказана"; set[c] = (set[c]||0) + num(f.area); });
+  return `<div class="legend">${Object.entries(set).sort((a,b)=>b[1]-a[1]).map(([c,a]) => `<span class="crop"><i class="dot" style="background:${esc(cropColor(c))}"></i>${esc(c)} <span class="muted">${fmt0(a)} га</span></span>`).join("")}</div>`;
+}
+function opsProgress(ops){
+  if(!ops.length) return `<div class="empty">Агрооперацій у цьому сезоні немає.</div>`;
+  const by = {};
+  ops.forEach(o => { const k = opTitle(o); const x = by[k] ||= { plan:0, done:0, n:0, g:opGroup(o) }; x.plan += opPlanned(o); x.done += Math.min(opDone(o), opPlanned(o) || opDone(o)); x.n++; });
+  return `<div class="tw"><table><thead><tr><th>Операція</th><th class="n">К-сть</th><th class="n">План, га</th><th class="n">Виконано, га</th><th>Прогрес</th></tr></thead><tbody>
+  ${Object.entries(by).sort((a,b)=>b[1].plan-a[1].plan).map(([k,x]) => { const p = x.plan ? Math.min(100, x.done/x.plan*100) : 0; return `<tr><td><span class="crop"><i class="dot" style="background:${GROUP_COLOR[x.g]||"#888"}"></i>${esc(k)}</span></td><td class="n">${x.n}</td><td class="n">${fmt(x.plan)}</td><td class="n">${fmt(x.done)}</td><td><div class="bar" title="${fmt0(p)}%"><i style="width:${p}%"></i></div></td></tr>`; }).join("")}
+  </tbody></table></div>`;
+}
+
+function viewFields(){
+  const groups = [...new Set(S.fields.map(f => f.group || ""))].sort((a,b)=>a.localeCompare(b,"uk"));
+  const q = state.fieldQ.toLowerCase();
+  const list = S.fields.filter(f => (!state.fieldGroup || (f.group||"")===state.fieldGroup) && (!q || (f.name+" "+(f.group||"")+" "+fieldCrop(f)).toLowerCase().includes(q)))
+    .sort((a,b)=> (a.group||"").localeCompare(b.group||"","uk") || a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const sel = state.fieldSel && byId("fields", state.fieldSel);
+  let lastG = null;
+  return header("Поля і карта", `<button class="btn" type="button" data-act="import">Імпорт контурів KML/GeoJSON</button><button class="btn" type="button" data-act="csvFields">Експорт</button><button class="btn" type="button" data-act="drawField">Намалювати поле на карті</button><button class="btn pri" type="button" data-act="newField">+ Поле</button>`) + statusBanner() + `
+  <div class="grid g2">
+    <div>
+      <div class="filters"><input id="fq" placeholder="Пошук: поле, група, культура" value="${esc(state.fieldQ)}" style="flex:1;min-width:180px">
+      <select id="fg">${opt("", "Всі групи", state.fieldGroup)}${groups.map(g=>opt(g, g||"Без групи", state.fieldGroup)).join("")}</select></div>
+      <div class="tw"><table><thead><tr><th>Поле</th><th class="n">Площа, га</th><th>Культура ${state.season}</th><th>Сорт</th><th>Посів</th><th class="n">Урожайність, ц/га</th></tr></thead><tbody>
+      ${list.length ? list.map(f => { const s = fieldSeason(f); let g = ""; if(f.group !== lastG){ lastG = f.group; const gl = list.filter(x=>x.group===f.group); g = `<tr class="grp"><td>${esc(f.group||"Без групи")}</td><td class="n">${fmt(sum(gl,x=>x.area))}</td><td colspan="4" class="muted">${gl.length} пол.</td></tr>`; }
+        return g + `<tr class="click" data-field="${esc(f.id)}" style="${state.fieldSel===f.id?"outline:2px solid var(--accent);outline-offset:-2px":""}"><td>${esc(f.name)}${f.contours?"":` <span class="muted" title="немає контуру">◌</span>`}${f.demo?` <span class="pill st-cancel">приклад</span>`:""}</td><td class="n">${fmt(num(f.area))}</td><td>${cropTag(s.crop)}</td><td>${esc(s.variety||"")}</td><td>${fdate(s.sowDate)}</td><td class="n">${s.yield?fmt(num(s.yield)):"—"}</td></tr>`; }).join("")
+        : `<tr><td colspan="6"><div class="empty"><b>Полів не знайдено</b>Додайте поле або імпортуйте контури.</div></td></tr>`}
+      </tbody></table></div>
+      <p class="note">Разом: ${list.length} полів, ${fmt(sum(list,f=>f.area))} га.</p>
+    </div>
+    <div class="grid" style="align-content:start">
+      <div class="card"><h2>Карта · ${state.season}</h2>${mapHtml("fields", list)}${legend(list)}</div>
+      ${sel ? fieldCard(sel) : `<div class="card"><div class="empty">Оберіть поле в таблиці або на карті, щоб побачити його картку.</div></div>`}
+    </div>
+  </div>`;
+}
+function fieldCard(f){
+  const s = fieldSeason(f);
+  const ops = S.ops.filter(o => o.fieldId === f.id).sort((a,b)=> (b.factFrom||b.plannedFrom||"").localeCompare(a.factFrom||a.plannedFrom||""));
+  const years = Object.keys(f.seasons||{}).sort().reverse();
+  return `<div class="card">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><h2 style="margin:0;flex:1">${esc(f.name)}</h2><button class="btn sm" type="button" data-act="editField" data-id="${esc(f.id)}">Редагувати</button><button class="btn sm" type="button" data-act="redraw" data-id="${esc(f.id)}">${f.contours?"Перемалювати контур":"Намалювати контур"}</button><button class="btn sm" type="button" data-act="newOp" data-field="${esc(f.id)}">+ Агрооперація</button></div>
+    <dl class="dl">
+      <dt>Група</dt><dd>${esc(f.group||"—")}</dd>
+      <dt>Оброблювальна площа</dt><dd>${fmt(num(f.area))} га</dd>
+      <dt>Офіційна площа</dt><dd>${f.officialArea?fmt(num(f.officialArea))+" га":"—"}</dd>
+      <dt>Площа за контуром</dt><dd>${f.calcArea?fmt(num(f.calcArea))+" га":"—"}</dd>
+      <dt>Культура ${state.season}</dt><dd>${cropTag(s.crop)} ${esc(s.variety||"")}</dd>
+      <dt>Посів / збирання</dt><dd>${fdate(s.sowDate)} / ${fdate(s.harvestDate)}</dd>
+      <dt>Урожайність план / факт</dt><dd>${s.plannedYield?fmt(num(s.plannedYield)):"—"} / ${s.yield?fmt(num(s.yield)):"—"} ц/га${s.yield?` · урожай ${fmt(num(s.yield)*num(f.area)/10)} т`:""}</dd>
+      ${f.cadastre?`<dt>Кадастрові номери</dt><dd>${esc(f.cadastre)}</dd>`:""}
+      ${f.note?`<dt>Примітка</dt><dd>${esc(f.note)}</dd>`:""}
+    </dl>
+    ${years.length?`<h2 style="margin-top:16px">Історія культур</h2><div class="legend">${years.map(y=>`<span><b>${y}</b> ${cropTag(f.seasons[y].crop)}</span>`).join("")}</div>`:""}
+    <h2 style="margin-top:16px">Агрооперації (${ops.length})</h2>
+    ${ops.length ? `<div class="tw"><table><tbody>${ops.slice(0,15).map(o=>`<tr class="click" data-op="${esc(o.id)}"><td>${esc(opTitle(o))}<div class="note">сезон ${esc(o.season)} · ${fdate(o.factFrom||o.plannedFrom)}</div></td><td>${statusPill(o.status)}</td><td class="n">${fmt(opDone(o))} / ${fmt(opPlanned(o))} га</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Ще немає.</p>`}
+  </div>`;
+}
+function fieldDialog(f, contours){
+  const isNew = !f; f = f || { name:"", group:state.fieldGroup||"", seasons:{} };
+  if(contours){ f = Object.assign({}, f, { contours, calcArea: +contourArea(contours).toFixed(2) }); if(!num(f.area)) f.area = f.calcArea; }
+  const s = fieldSeason(f);
+  openModal({ title: isNew ? "Нове поле" : "Поле " + f.name, wide: true,
+    body: `<div class="f">
+      <label>Назва поля<input id="fName" value="${esc(f.name)}" required></label>
+      <label>Група полів<input id="fGroup" list="groupList" value="${esc(f.group||"")}"></label>
+      <label>Оброблювальна площа, га<input id="fArea" inputmode="decimal" value="${esc(f.area??"")}"></label>
+      <label>Офіційна площа, га<input id="fOff" inputmode="decimal" value="${esc(f.officialArea??"")}"></label>
+      <label class="full">Кадастрові номери<input id="fCad" value="${esc(f.cadastre||"")}" placeholder="через кому"></label>
+    </div>
+    <h4 style="margin:4px 0 0">Сезон ${state.season}</h4>
+    <div class="f">
+      <label>Культура<input id="sCrop" list="cropList" value="${esc(s.crop||"")}"></label>
+      <label>Сорт / гібрид<input id="sVar" value="${esc(s.variety||"")}"></label>
+      <label>Дата посіву<input id="sSow" type="date" value="${esc(s.sowDate||"")}"></label>
+      <label>Дата збирання<input id="sHarv" type="date" value="${esc(s.harvestDate||"")}"></label>
+      <label>Планова урожайність, ц/га<input id="sPlan" inputmode="decimal" value="${esc(s.plannedYield??"")}"></label>
+      <label>Фактична урожайність, ц/га<input id="sYield" inputmode="decimal" value="${esc(s.yield??"")}"></label>
+      <label class="full">Примітка<textarea id="fNote">${esc(f.note||"")}</textarea></label>
+      <label><span><input type="checkbox" id="fArch" ${f.archived?"checked":""}> В архіві (не рахується в площі)</span></label>
+    </div>${cropDatalist()}${groupDatalist()}
+    ${f.contours?`<p class="note">Контур: ${f.contours.length} полігон(и), ${fmt(num(f.calcArea))} га за контуром.</p>`:`<p class="note">Контур можна додати імпортом KML/GeoJSON (поле з такою самою назвою).</p>`}`,
+    extra: (!isNew && f.contours) ? `<button class="btn" type="button" id="dropC">Прибрати контур</button>` : "",
+    onDelete: isNew ? null : async () => { await remove("fields", f.id); if(state.fieldSel===f.id) state.fieldSel=null; },
+    onSave: async (m) => {
+      const name = val(m,"fName"); if(!name){ m.querySelector("#fName").focus(); return false; }
+      const seasons = Object.assign({}, f.seasons||{});
+      seasons[state.season] = { crop: val(m,"sCrop"), variety: val(m,"sVar"), sowDate: val(m,"sSow"), harvestDate: val(m,"sHarv"), plannedYield: val(m,"sPlan"), yield: val(m,"sYield") };
+      if(!Object.values(seasons[state.season]).some(Boolean)) delete seasons[state.season];
+      const id = await save("fields", Object.assign({}, f, { name, group: val(m,"fGroup"), area: num(val(m,"fArea")) || num(f.calcArea), officialArea: val(m,"fOff") ? num(val(m,"fOff")) : "", cadastre: val(m,"fCad"), note: val(m,"fNote"), archived: m.querySelector("#fArch").checked, seasons }));
+      if(id) state.fieldSel = id;
+      return id ? true : false;
+    }
+  });
+  const dc = document.getElementById("dropC");
+  if(dc) dc.onclick = async () => { const c = Object.assign({}, f); delete c.contours; delete c.calcArea; await save("fields", c); closeModal(); };
+}
+
+function viewRotation(){
+  const years = [state.season-3, state.season-2, state.season-1, state.season, state.season+1];
+  const list = [...S.fields].filter(f=>!f.archived).sort((a,b)=> (a.group||"").localeCompare(b.group||"","uk") || a.name.localeCompare(b.name,"uk",{numeric:true}));
+  let lastG = null;
+  return header("Сівозміна", `<button class="btn" type="button" data-act="csvRot">Експорт</button>`) + statusBanner() + `
+  <p class="note">Натисніть на клітинку, щоб вказати культуру поля в потрібному сезоні.</p>
+  <div class="tw rot"><table><thead><tr><th>Поле</th><th class="n">Площа, га</th>${years.map(y=>`<th>${y}${y===state.season?" · поточний":""}</th>`).join("")}</tr></thead><tbody>
+  ${list.length ? list.map(f => { let g=""; if(f.group!==lastG){ lastG=f.group; g=`<tr class="grp"><td colspan="${years.length+2}">${esc(f.group||"Без групи")}</td></tr>`; }
+    return g + `<tr><td>${esc(f.name)}</td><td class="n">${fmt(num(f.area))}</td>${years.map(y => { const c = fieldCrop(f, y); return `<td><span class="chip ${c?"":"none"}" role="button" tabindex="0" data-rot="${esc(f.id)}" data-y="${y}">${c?`<i class="dot" style="background:${esc(cropColor(c))}"></i>${esc(c)}`:"додати"}</span></td>`; }).join("")}</tr>`; }).join("")
+  : `<tr><td colspan="${years.length+2}"><div class="empty">Додайте поля, щоб вести сівозміну.</div></td></tr>`}
+  </tbody></table></div>
+  <div class="card" style="margin-top:16px"><h2>Структура посівів по роках, га</h2>${rotationSummary(years, list)}</div>`;
+}
+function rotationSummary(years, list){
+  const crops = new Set(); years.forEach(y => list.forEach(f => { const c = fieldCrop(f,y); if(c) crops.add(c); }));
+  if(!crops.size) return `<p class="note">Немає даних.</p>`;
+  return `<div class="tw"><table><thead><tr><th>Культура</th>${years.map(y=>`<th class="n">${y}</th>`).join("")}</tr></thead><tbody>${[...crops].map(c=>`<tr><td>${cropTag(c)}</td>${years.map(y=>{ const a = sum(list.filter(f=>fieldCrop(f,y)===c), f=>f.area); return `<td class="n">${a?fmt(a):"—"}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+function rotationDialog(fid, y){
+  const f = byId("fields", fid); const s = fieldSeason(f, y);
+  openModal({ title: `${f.name} · сезон ${y}`, body: `<div class="f"><label>Культура<input id="rCrop" list="cropList" value="${esc(s.crop||"")}"></label><label>Сорт / гібрид<input id="rVar" value="${esc(s.variety||"")}"></label><label>Фактична урожайність, ц/га<input id="rY" inputmode="decimal" value="${esc(s.yield??"")}"></label></div>${cropDatalist()}`,
+    onSave: async (m) => { const seasons = Object.assign({}, f.seasons||{}); const ns = Object.assign({}, s, { crop: val(m,"rCrop"), variety: val(m,"rVar"), yield: val(m,"rY") }); if(Object.values(ns).some(Boolean)) seasons[y] = ns; else delete seasons[y]; return !!(await save("fields", Object.assign({}, f, { seasons }))); } });
+}
+
+function viewOps(){
+  const F = state.ops; const q = F.q.toLowerCase();
+  const ops = S.ops.filter(o => Number(o.season) === state.season && (!F.status || (o.status||"planned")===F.status) && (!F.group || opGroup(o)===F.group)
+    && (!q || ((byId("fields",o.fieldId)||{}).name+" "+opTitle(o)+" "+(o.responsible||"")).toLowerCase().includes(q)));
+  const tree = {};
+  ops.forEach(o => { const g = opGroup(o), t = opTitle(o); ((tree[g] ||= {})[t] ||= []).push(o); });
+  const order = Object.keys(WORKS);
+  return header("Агрооперації", `<button class="btn" type="button" data-act="csvOps">Експорт</button><button class="btn pri" type="button" data-act="newOp">+ Агрооперація</button>`) + statusBanner() + `
+  <div class="filters">
+    <input id="oq" placeholder="Пошук: поле, операція, відповідальний" value="${esc(F.q)}" style="flex:1;min-width:200px">
+    <select id="og">${opt("", "Всі групи робіт", F.group)}${order.map(g=>opt(g,g,F.group)).join("")}</select>
+    <select id="os">${opt("", "Всі статуси", F.status)}${Object.entries(STATUS).map(([k,v])=>opt(k,v,F.status)).join("")}</select>
+    <span class="muted">Сезон ${state.season} · ${ops.length} операцій</span>
+  </div>
+  <div class="tw"><table><thead><tr><th>№</th><th>Поле</th><th>Культура</th><th>Статус</th><th>План</th><th>Факт</th><th class="n">План, га</th><th class="n">Виконано, га</th><th>Внесення</th><th>Техніка / водії</th><th>Відповідальний</th></tr></thead><tbody>
+  ${ops.length ? order.concat(Object.keys(tree).filter(g=>!order.includes(g))).filter(g=>tree[g]).map(g => {
+      const types = tree[g]; const all = Object.values(types).flat();
+      return `<tr class="grp"><td colspan="6"><span class="crop"><i class="dot" style="background:${GROUP_COLOR[g]||"#888"}"></i>${esc(g)} <span class="muted">${all.length}</span></span></td><td class="n">${fmt(sum(all,opPlanned))}</td><td class="n">${fmt(sum(all,opDone))}</td><td colspan="3"></td></tr>` +
+        Object.entries(types).map(([t, list]) => `<tr class="sub"><td colspan="6">${esc(t)} · ${list.length}</td><td class="n">${fmt(sum(list,opPlanned))}</td><td class="n">${fmt(sum(list,opDone))}</td><td colspan="3"></td></tr>` +
+          list.sort((a,b)=>(a.plannedFrom||"").localeCompare(b.plannedFrom||"")).map(o => opRow(o)).join("")).join("");
+    }).join("") : `<tr><td colspan="11"><div class="empty"><b>Агрооперацій немає</b>Змініть фільтри або створіть агрооперацію.</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function opRow(o){
+  const f = byId("fields", o.fieldId) || {};
+  const plan = opPlanned(o), done = opDone(o), p = plan ? Math.min(100, done/plan*100) : 0;
+  const apps = (o.applications||[]).map(a => `${esc(nameOf("products",a.productId)||a.name||"")} ${fmt(num(a.rate))} ${esc(a.unit||"")}/га`).join("<br>");
+  const mach = (o.machineIds||[]).map(id=>esc(nameOf("machines",id))).filter(Boolean).join(", ");
+  const drv = (o.driverIds||[]).map(id=>esc(nameOf("people",id))).filter(Boolean).join(", ");
+  return `<tr class="click" data-op="${esc(o.id)}"><td class="muted">${esc(o.number||"")}</td><td>${esc(f.name||"—")}<div class="note">${esc(f.group||"")}</div></td><td>${cropTag(fieldCrop(f, o.season))}</td><td>${statusPill(o.status)}</td>
+  <td>${fdate(o.plannedFrom)}${o.plannedTo&&o.plannedTo!==o.plannedFrom?"–"+fdate(o.plannedTo):""}</td><td>${o.factFrom?fdate(o.factFrom)+(o.factTo&&o.factTo!==o.factFrom?"–"+fdate(o.factTo):""):"—"}</td>
+  <td class="n">${fmt(plan)}</td><td class="n">${fmt(done)}<div class="bar" style="margin-top:4px"><i style="width:${p}%"></i></div></td><td>${apps||"—"}</td><td>${mach||"—"}${drv?`<div class="note">${drv}</div>`:""}</td><td>${esc(o.responsible||"")}</td></tr>`;
+}
+function workTypeOptions(sel){ return Object.entries(WORKS).map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t=>opt(t,t,sel)).join("")}</optgroup>`).join(""); }
+function appRowHtml(a={}){
+  return `<div class="approw"><select class="aP" aria-label="Матеріал">${opt("", "— матеріал —", a.productId)}${PRODUCT_TYPES.map(t => { const ps = sorted("products").filter(p=>p.type===t); return ps.length?`<optgroup label="${esc(t)}">${ps.map(p=>opt(p.id,p.name,a.productId)).join("")}</optgroup>`:""; }).join("")}</select>
+  <input class="aR" inputmode="decimal" placeholder="норма на 1 га" value="${esc(a.rate??"")}" aria-label="Норма">
+  <select class="aU" aria-label="Одиниця">${UNITS.map(u=>opt(u,u,a.unit||"")).join("")}</select>
+  <button class="btn sm aX" type="button" aria-label="Прибрати рядок">×</button></div>`;
+}
+function opDialog(o, presetField){
+  const isNew = !o;
+  o = o || { season: state.season, status:"planned", fieldId: presetField || "", workType:"Дискування", applications:[], machineIds:[], driverIds:[], plannedFrom: today() };
+  const fields = [...S.fields].filter(f=>!f.archived || f.id===o.fieldId).sort((a,b)=>(a.group||"").localeCompare(b.group||"","uk")||a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const linked = isNew ? [] : opTasks(o);
+  const m = openModal({ title: isNew ? "Нова агрооперація" : `Агрооперація №${o.number||""}`, wide: true,
+    body: `<div class="f">
+      <label>Вид робіт<select id="oType">${workTypeOptions(o.workType)}</select></label>
+      <label>Своя назва (для «Інше»)<input id="oCustom" value="${esc(o.customName||"")}"></label>
+      <label>Поле<select id="oField">${opt("", "— оберіть поле —", o.fieldId)}${fields.map(f=>opt(f.id, `${f.name} · ${f.group||""} · ${fmt(num(f.area))} га`, o.fieldId)).join("")}</select></label>
+      <label>Сезон<input id="oSeason" type="number" value="${esc(o.season)}"></label>
+      <label>Статус<select id="oStatus">${Object.entries(STATUS).map(([k,v])=>opt(k,v,o.status||"planned")).join("")}</select></label>
+      <label>План з<input id="oPF" type="date" value="${esc(o.plannedFrom||"")}"></label>
+      <label>План до<input id="oPT" type="date" value="${esc(o.plannedTo||"")}"></label>
+      <label>Запланована площа, га<input id="oPA" inputmode="decimal" value="${esc(o.plannedArea??"")}" placeholder="площа поля"></label>
+      <label>Факт з<input id="oFF" type="date" value="${esc(o.factFrom||"")}"></label>
+      <label>Факт до<input id="oFT" type="date" value="${esc(o.factTo||"")}"></label>
+      <label>Виконано, га<input id="oDA" inputmode="decimal" value="${esc(o.doneArea??"")}" ${linked.length?"disabled":""} placeholder="${linked.length?"рахується з завдань техніки":""}"></label>
+      <label>Відповідальний<input id="oResp" value="${esc(o.responsible||"")}"></label>
+    </div>
+    <div><div class="note" style="margin-bottom:6px">Внесення: насіння, ЗЗР, добрива (норма на 1 га). Довідник матеріалів — у розділі «Довідники».</div><div class="apps" id="apps">${(o.applications||[]).map(appRowHtml).join("")}</div><button class="btn sm" type="button" id="addApp" style="margin-top:6px">+ Матеріал</button></div>
+    <div class="f">
+      <label class="full">Техніка<div class="checks">${sorted("machines").map(x=>`<label><input type="checkbox" name="oM" value="${esc(x.id)}" ${(o.machineIds||[]).includes(x.id)?"checked":""}>${esc(x.name)}</label>`).join("") || `<span class="note">Додайте машини в розділі «Машини»</span>`}</div></label>
+      <label class="full">Водії / механізатори<div class="checks">${sorted("people").map(x=>`<label><input type="checkbox" name="oD" value="${esc(x.id)}" ${(o.driverIds||[]).includes(x.id)?"checked":""}>${esc(x.name)}</label>`).join("") || `<span class="note">Додайте людей у «Довідниках»</span>`}</div></label>
+      <label>Агрегат / обладнання<select id="oImpl">${optsFrom(sorted("implements"), o.implementId, "—")}</select></label>
+      <label class="full">Примітка<textarea id="oNote">${esc(o.note||"")}</textarea></label>
+    </div>
+    ${linked.length?`<div class="note">Пов’язані завдання техніки: ${linked.length}, разом ${fmt(sum(linked,t=>t.area))} га, пальне ${fmt(sum(linked,t=>t.fuel),0)} л.</div>`:""}`,
+    onDelete: isNew ? null : async () => remove("ops", o.id),
+    onSave: async (m) => {
+      const fieldId = val(m,"oField"); if(!fieldId){ m.querySelector("#oField").focus(); return false; }
+      const applications = [...m.querySelectorAll(".approw")].map(r => ({ productId: r.querySelector(".aP").value, rate: num(r.querySelector(".aR").value), unit: r.querySelector(".aU").value })).filter(a => a.productId);
+      const number = o.number || (Math.max(0, ...S.ops.map(x => Number(x.number)||0)) + 1);
+      const workType = val(m,"oType");
+      return !!(await save("ops", Object.assign({}, o, { number, workType, workGroup: (Object.entries(WORKS).find(([g,ts])=>ts.includes(workType))||["Інше"])[0], customName: val(m,"oCustom"), fieldId, season: Number(val(m,"oSeason"))||state.season, status: val(m,"oStatus"),
+        plannedFrom: val(m,"oPF"), plannedTo: val(m,"oPT"), plannedArea: val(m,"oPA") ? num(val(m,"oPA")) : "", factFrom: val(m,"oFF"), factTo: val(m,"oFT"), doneArea: linked.length ? (o.doneArea||"") : (val(m,"oDA") ? num(val(m,"oDA")) : ""),
+        responsible: val(m,"oResp"), applications, machineIds: checked(m,"oM"), driverIds: checked(m,"oD"), implementId: val(m,"oImpl"), note: val(m,"oNote") })));
+    }
+  });
+  m.querySelector("#addApp").onclick = () => m.querySelector("#apps").insertAdjacentHTML("beforeend", appRowHtml());
+  m.querySelector("#apps").addEventListener("click", e => { if(e.target.classList.contains("aX")) e.target.closest(".approw").remove(); });
+  m.querySelector("#apps").addEventListener("change", e => { if(e.target.classList.contains("aP")){ const p = byId("products", e.target.value); if(p && p.unit){ const u = e.target.closest(".approw").querySelector(".aU"); if([...u.options].some(x=>x.value===p.unit)) u.value = p.unit; } } });
+}
+
+/* machines */
+function machineStats(mid){
+  const ts = S.tasks.filter(t => t.machineId === mid && inPeriod(t.date));
+  const area = sum(ts,t=>t.area), fuel = sum(ts,t=>t.fuel), km = sum(ts,t=>num(t.kmField)+num(t.kmRoad)), h = sum(ts,hoursOf);
+  return { n: ts.length, area, fuel, km, h, lha: area ? fuel/area : 0 };
+}
+function viewMachines(){
+  if(state.machineId && byId("machines", state.machineId)) return viewMachine(byId("machines", state.machineId));
+  const q = state.machQ.toLowerCase();
+  const list = sorted("machines").filter(x => !q || (x.name+" "+(x.plate||"")+" "+(x.model||"")).toLowerCase().includes(q));
+  const groups = ["Агро","Транспорт"]; list.forEach(x => { if(!groups.includes(x.type||"Агро")) groups.push(x.type); });
+  return header("Машини", `<button class="btn" type="button" data-act="csvMach">Експорт</button><button class="btn pri" type="button" data-act="newMachine">+ Машина</button>`) + statusBanner() + periodBar() + `
+  <div class="filters"><input id="mq" placeholder="Пошук: назва, номер, модель" value="${esc(state.machQ)}" style="flex:1;min-width:200px"></div>
+  <div class="tw"><table><thead><tr><th>Машина</th><th>Підтип</th><th>Держномер</th><th>Пальне</th><th>GPS-трекер</th><th class="n">Завдань</th><th class="n">Оброблено, га</th><th class="n">Пробіг, км</th><th class="n">Мотогод.</th><th class="n">Пальне, л</th><th class="n">л/га</th><th>Наступне ТО</th></tr></thead><tbody>
+  ${list.length ? groups.map(g => { const gl = list.filter(x => (x.type||"Агро")===g); if(!gl.length) return "";
+    return `<tr class="grp"><td colspan="12">${esc(g)} <span class="muted">${gl.length}</span></td></tr>` + gl.map(x => { const st = machineStats(x.id); const next = S.service.filter(s=>s.machineId===x.id && s.status!=="done").sort((a,b)=>(a.date||"").localeCompare(b.date||""))[0];
+      return `<tr class="click" data-machine="${esc(x.id)}"><td><b>${esc(x.name)}</b>${x.demo?` <span class="pill st-cancel">приклад</span>`:""}<div class="note">${esc([x.make,x.model].filter(Boolean).join(" "))}</div></td><td>${esc(x.subtype||"")}</td><td>${esc(x.plate||"")}</td><td>${esc(x.fuel||"")}</td><td>${esc(x.tracker||"")}</td>
+      <td class="n">${st.n||"—"}</td><td class="n">${st.area?fmt(st.area):"—"}</td><td class="n">${st.km?fmt0(st.km):"—"}</td><td class="n">${st.h?fmt(st.h,1):"—"}</td><td class="n">${st.fuel?fmt0(st.fuel):"—"}</td><td class="n">${st.lha?fmt(st.lha,1):"—"}</td>
+      <td>${next?`<span class="pill ${next.date&&next.date<today()?"st-cancel":"st-planned"}" style="${next.date&&next.date<today()?"color:var(--bad)":""}">${esc(next.kind)} · ${fdate(next.date)}</span>`:"—"}</td></tr>`; }).join(""); }).join("")
+  : `<tr><td colspan="12"><div class="empty"><b>Машин ще немає</b>Додайте трактори, комбайни й транспорт.</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function periodBar(){
+  return `<div class="filters"><span class="muted">Період</span><input type="date" id="pFrom" value="${esc(state.period.from)}"><span class="muted">—</span><input type="date" id="pTo" value="${esc(state.period.to)}">
+  <button class="btn sm" type="button" data-per="today">Сьогодні</button><button class="btn sm" type="button" data-per="week">7 днів</button><button class="btn sm" type="button" data-per="month">Цей місяць</button><button class="btn sm" type="button" data-per="season">Сезон ${state.season}</button><button class="btn sm" type="button" data-per="year">Цей рік</button></div>`;
+}
+function viewMachine(x){
+  const st = machineStats(x.id);
+  const ts = S.tasks.filter(t => t.machineId === x.id && inPeriod(t.date)).sort((a,b)=>(b.date+(b.start||"")).localeCompare(a.date+(a.start||"")));
+  const sv = S.service.filter(s => s.machineId === x.id).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  return header(x.name, `<button class="btn" type="button" data-act="backMach">← Усі машини</button><button class="btn" type="button" data-act="editMachine" data-id="${esc(x.id)}">Редагувати</button><button class="btn" type="button" data-act="newService" data-machine="${esc(x.id)}">+ Обслуговування</button><button class="btn pri" type="button" data-act="newTask" data-machine="${esc(x.id)}">+ Завдання</button>`) + statusBanner() + periodBar() + `
+  <div class="kpis">
+    <div class="kpi"><b>${st.n}</b><span>завдань за період</span></div>
+    <div class="kpi"><b>${fmt(st.area)}</b><span>га оброблено</span></div>
+    <div class="kpi"><b>${fmt0(st.km)}</b><span>км пробігу</span></div>
+    <div class="kpi"><b>${fmt(st.h,1)}</b><span>мотогодин</span></div>
+    <div class="kpi"><b>${fmt0(st.fuel)}</b><span>л пального · ${st.lha?fmt(st.lha,1)+" л/га":"—"}</span></div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h2>Завдання за період</h2>${ts.length ? tasksTable(ts, false, true) : `<div class="empty">Завдань за цей період немає.</div>`}</div>
+    <div class="grid" style="align-content:start">
+      <div class="card"><h2>Інформація про машину</h2><dl class="dl">
+        <dt>Тип</dt><dd>${esc(x.type||"Агро")} / ${esc(x.subtype||"—")}</dd>
+        <dt>Виробник, модель</dt><dd>${esc([x.make,x.model].filter(Boolean).join(" ")||"—")}</dd>
+        <dt>Рік випуску</dt><dd>${esc(x.year||"—")}</dd>
+        <dt>Держномер</dt><dd>${esc(x.plate||"—")}</dd>
+        <dt>Інвентарний / VIN</dt><dd>${esc(x.inv||"—")}</dd>
+        <dt>Тип пального</dt><dd>${esc(x.fuel||"—")}</dd>
+        <dt>Норма витрат</dt><dd>${x.normHa?fmt(num(x.normHa),1)+" л/га":"—"}${x.normKm?" · "+fmt(num(x.normKm),1)+" л/100 км":""}</dd>
+        <dt>GPS-трекер</dt><dd>${esc(x.tracker||"—")}</dd>
+        <dt>Водій за замовч.</dt><dd>${esc(nameOf("people", x.driverId)||"—")}</dd>
+        ${x.note?`<dt>Примітка</dt><dd>${esc(x.note)}</dd>`:""}
+      </dl></div>
+      <div class="card"><h2>Обслуговування і ремонти</h2>${sv.length ? serviceTable(sv, true) : `<p class="note">Записів немає.</p>`}</div>
+    </div>
+  </div>`;
+}
+function machineDialog(x){
+  const isNew = !x; x = x || { type:"Агро", fuel:"Дизель" };
+  const m = openModal({ title: isNew ? "Нова машина" : x.name, wide:true,
+    body: `<div class="f">
+      <label>Назва<input id="xName" value="${esc(x.name||"")}" placeholder="напр. John Deere 7920 FX54"></label>
+      <label>Тип<select id="xType">${Object.keys(MACHINE_TYPES).map(t=>opt(t,t,x.type)).join("")}</select></label>
+      <label>Підтип<select id="xSub">${optsFrom(MACHINE_TYPES[x.type]||MACHINE_TYPES["Агро"], x.subtype, "—")}</select></label>
+      <label>Виробник<input id="xMake" value="${esc(x.make||"")}"></label>
+      <label>Модель<input id="xModel" value="${esc(x.model||"")}"></label>
+      <label>Рік випуску<input id="xYear" inputmode="numeric" value="${esc(x.year||"")}"></label>
+      <label>Держномер<input id="xPlate" value="${esc(x.plate||"")}"></label>
+      <label>Інвентарний номер / VIN<input id="xInv" value="${esc(x.inv||"")}"></label>
+      <label>Тип пального<select id="xFuel">${optsFrom(["Дизель","Бензин","Газ","Електро"], x.fuel)}</select></label>
+      <label>Норма, л/га<input id="xNH" inputmode="decimal" value="${esc(x.normHa??"")}"></label>
+      <label>Норма, л/100 км<input id="xNK" inputmode="decimal" value="${esc(x.normKm??"")}"></label>
+      <label>GPS-трекер (IMEI, система)<input id="xTr" value="${esc(x.tracker||"")}" placeholder="напр. Wialon 352353…"></label>
+      <label>Водій за замовчуванням<select id="xDrv">${optsFrom(sorted("people"), x.driverId, "—")}</select></label>
+      <label class="full">Примітка<textarea id="xNote">${esc(x.note||"")}</textarea></label>
+    </div>`,
+    onDelete: isNew ? null : async () => { await remove("machines", x.id); state.machineId = null; },
+    onSave: async (m) => { const name = val(m,"xName"); if(!name){ m.querySelector("#xName").focus(); return false; }
+      return !!(await save("machines", Object.assign({}, x, { name, type: val(m,"xType"), subtype: val(m,"xSub"), make: val(m,"xMake"), model: val(m,"xModel"), year: val(m,"xYear"), plate: val(m,"xPlate"), inv: val(m,"xInv"), fuel: val(m,"xFuel"), normHa: val(m,"xNH"), normKm: val(m,"xNK"), tracker: val(m,"xTr"), driverId: val(m,"xDrv"), note: val(m,"xNote") }))); }
+  });
+  m.querySelector("#xType").onchange = e => { m.querySelector("#xSub").innerHTML = optsFrom(MACHINE_TYPES[e.target.value], "", "—"); };
+}
+
+/* tasks */
+function tasksTable(ts, compact, noMachine){
+  return `<div class="tw"><table><thead><tr><th>Дата</th>${noMachine?"":"<th>Машина</th>"}<th>Робота / поле</th>${compact?"":"<th>Водій</th><th>Агрегат</th>"}<th class="n">Га</th>${compact?"":'<th class="n">Км</th><th class="n">Год.</th>'}<th class="n">Пальне, л</th>${compact?"":'<th class="n">л/га</th>'}</tr></thead><tbody>
+  ${ts.map(t => { const f = byId("fields", t.fieldId); const op = byId("ops", t.opId); const lha = num(t.area) ? num(t.fuel)/num(t.area) : 0;
+    return `<tr class="click" data-task="${esc(t.id)}"><td>${fdate(t.date)}<div class="note">${esc(t.start||"")}${t.end?"–"+esc(t.end):""}</div></td>${noMachine?"":`<td>${esc(nameOf("machines",t.machineId)||"—")}</td>`}
+    <td>${esc(op?opTitle(op):(t.work||"—"))}<div class="note">${esc(f?f.name:(t.place||""))}</div></td>${compact?"":`<td>${esc(nameOf("people",t.driverId)||"—")}</td><td>${esc(nameOf("implements",t.implementId)||"—")}</td>`}
+    <td class="n">${t.area?fmt(num(t.area)):"—"}</td>${compact?"":`<td class="n">${(num(t.kmField)+num(t.kmRoad))?fmt(num(t.kmField)+num(t.kmRoad),1):"—"}</td><td class="n">${hoursOf(t)?fmt(hoursOf(t),1):"—"}</td>`}<td class="n">${t.fuel?fmt0(num(t.fuel)):"—"}</td>${compact?"":`<td class="n">${lha?fmt(lha,1):"—"}</td>`}</tr>`; }).join("")}
+  </tbody></table></div>`;
+}
+function viewTasks(){
+  const ts = S.tasks.filter(t => inPeriod(t.date)).sort((a,b)=>(b.date+(b.start||"")).localeCompare(a.date+(a.start||"")));
+  return header("Завдання техніки", `<button class="btn" type="button" data-act="csvTasks">Експорт</button><button class="btn pri" type="button" data-act="newTask">+ Завдання</button>`) + statusBanner() + periodBar() + `
+  <div class="kpis"><div class="kpi"><b>${ts.length}</b><span>завдань</span></div><div class="kpi"><b>${fmt(sum(ts,t=>t.area))}</b><span>га</span></div><div class="kpi"><b>${fmt0(sum(ts,t=>num(t.kmField)+num(t.kmRoad)))}</b><span>км</span></div><div class="kpi"><b>${fmt0(sum(ts,t=>t.fuel))}</b><span>л пального</span></div></div>
+  ${ts.length ? tasksTable(ts) : `<div class="card"><div class="empty"><b>Завдань за період немає</b>Завдання — це подорожній лист: машина, водій, поле, оброблені гектари, пробіг і пальне.</div></div>`}`;
+}
+function taskDialog(t, preset={}){
+  const isNew = !t;
+  t = t || Object.assign({ date: today(), start:"08:00", end:"18:00" }, preset);
+  if(isNew && t.machineId){ const mm = byId("machines", t.machineId); if(mm && mm.driverId) t.driverId = mm.driverId; }
+  const opsS = S.ops.filter(o => Number(o.season) === state.season || o.id === t.opId).sort((a,b)=>Number(b.number||0)-Number(a.number||0));
+  const fields = [...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Нове завдання техніки" : "Завдання техніки", wide:true,
+    body: `<div class="f">
+      <label>Дата<input id="tDate" type="date" value="${esc(t.date||"")}"></label>
+      <label>Початок<input id="tS" type="time" value="${esc(t.start||"")}"></label>
+      <label>Кінець<input id="tE" type="time" value="${esc(t.end||"")}"></label>
+      <label>Мотогодини (якщо відомо)<input id="tH" inputmode="decimal" value="${esc(t.hours??"")}" placeholder="або рахується з часу"></label>
+      <label>Машина<select id="tM">${optsFrom(sorted("machines"), t.machineId, "— оберіть —")}</select></label>
+      <label>Водій<select id="tD">${optsFrom(sorted("people"), t.driverId, "—")}</select></label>
+      <label>Агрегат<select id="tI">${optsFrom(sorted("implements"), t.implementId, "—")}</select></label>
+      <label>Агрооперація<select id="tO">${opt("", "— без прив’язки —", t.opId)}${opsS.map(o=>opt(o.id, `№${o.number} ${opTitle(o)} · ${(byId("fields",o.fieldId)||{}).name||""}`, t.opId)).join("")}</select></label>
+      <label>Поле<select id="tF">${opt("", "—", t.fieldId)}${fields.map(f=>opt(f.id, f.name, t.fieldId)).join("")}</select></label>
+      <label>Робота / маршрут (якщо без агрооперації)<input id="tW" value="${esc(t.work||"")}" placeholder="напр. Перевезення зерна на елеватор"></label>
+      <label>Оброблено, га<input id="tA" inputmode="decimal" value="${esc(t.area??"")}"></label>
+      <label>Пробіг по полю, км<input id="tKF" inputmode="decimal" value="${esc(t.kmField??"")}"></label>
+      <label>Пробіг дорогою, км<input id="tKR" inputmode="decimal" value="${esc(t.kmRoad??"")}"></label>
+      <label>Пальне витрачено, л<input id="tFu" inputmode="decimal" value="${esc(t.fuel??"")}"></label>
+      <label>Заправлено, л<input id="tRef" inputmode="decimal" value="${esc(t.refuel??"")}"></label>
+      <label class="full">Примітка<textarea id="tN">${esc(t.note||"")}</textarea></label>
+    </div><div class="note" id="tHint"></div>`,
+    onDelete: isNew ? null : async () => remove("tasks", t.id),
+    onSave: async (m) => { const machineId = val(m,"tM"); if(!machineId){ m.querySelector("#tM").focus(); return false; }
+      let fieldId = val(m,"tF"); const opId = val(m,"tO"); if(opId && !fieldId){ const op = byId("ops", opId); if(op) fieldId = op.fieldId; }
+      return !!(await save("tasks", Object.assign({}, t, { date: val(m,"tDate"), start: val(m,"tS"), end: val(m,"tE"), hours: val(m,"tH") ? num(val(m,"tH")) : "", machineId, driverId: val(m,"tD"), implementId: val(m,"tI"), opId, fieldId, work: val(m,"tW"),
+        area: val(m,"tA") ? num(val(m,"tA")) : "", kmField: val(m,"tKF") ? num(val(m,"tKF")) : "", kmRoad: val(m,"tKR") ? num(val(m,"tKR")) : "", fuel: val(m,"tFu") ? num(val(m,"tFu")) : "", refuel: val(m,"tRef") ? num(val(m,"tRef")) : "", note: val(m,"tN") }))); }
+  });
+  const hint = () => { const mm = byId("machines", val(m,"tM")); const a = num(val(m,"tA")), fu = num(val(m,"tFu")); let s = ""; if(a && fu) s = `Фактична витрата: ${fmt(fu/a,1)} л/га.`; if(mm && mm.normHa && a) s += ` Норма: ${fmt(num(mm.normHa)*a,0)} л (${fmt(num(mm.normHa),1)} л/га).`; m.querySelector("#tHint").textContent = s; };
+  m.addEventListener("input", hint); hint();
+  m.querySelector("#tM").addEventListener("change", e => { const mm = byId("machines", e.target.value); if(mm && mm.driverId && !val(m,"tD")) m.querySelector("#tD").value = mm.driverId; });
+  m.querySelector("#tO").addEventListener("change", e => { const op = byId("ops", e.target.value); if(op){ m.querySelector("#tF").value = op.fieldId || ""; if(op.implementId && !val(m,"tI")) m.querySelector("#tI").value = op.implementId; } });
+}
+
+/* service */
+function serviceTable(sv, noMachine){
+  return `<div class="tw"><table><thead><tr><th>Дата</th>${noMachine?"":"<th>Машина</th>"}<th>Вид</th><th>Статус</th><th class="n">Пробіг, км</th><th class="n">Мотогод.</th><th class="n">Вартість, грн</th><th>Примітка</th></tr></thead><tbody>
+  ${sv.map(s => { const late = s.status!=="done" && s.date && s.date < today(); return `<tr class="click" data-service="${esc(s.id)}"><td>${fdate(s.date)}</td>${noMachine?"":`<td>${esc(nameOf("machines",s.machineId)||"—")}</td>`}<td>${esc(s.kind||"")}</td><td><span class="pill ${s.status==="done"?"st-done":"st-planned"}" style="${late?"color:var(--bad)":""}">${s.status==="done"?"Зроблено":late?"Прострочено":"Заплановано"}</span></td><td class="n">${s.km?fmt0(num(s.km)):"—"}</td><td class="n">${s.mh?fmt0(num(s.mh)):"—"}</td><td class="n">${s.cost?fmt(num(s.cost)):"—"}</td><td>${esc(s.note||"")}</td></tr>`; }).join("")}
+  </tbody></table></div>`;
+}
+function viewService(){
+  const plan = S.service.filter(s => s.status !== "done").sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const done = S.service.filter(s => s.status === "done" && inPeriod(s.date)).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  return header("Обслуговування", `<button class="btn pri" type="button" data-act="newService">+ Обслуговування</button>`) + statusBanner() + `
+  <div class="card" style="margin-bottom:16px"><h2>Заплановано (${plan.length})</h2>${plan.length ? serviceTable(plan) : `<p class="note">Немає запланованих робіт.</p>`}</div>
+  ${periodBar()}
+  <div class="card"><h2>Виконано за період (${done.length}) · ${fmt(sum(done,s=>s.cost))} грн</h2>${done.length ? serviceTable(done) : `<p class="note">Немає записів за період.</p>`}</div>`;
+}
+function serviceDialog(s, preset={}){
+  const isNew = !s; s = s || Object.assign({ date: today(), status:"planned", kind:"ТО-1" }, preset);
+  openModal({ title: isNew ? "Обслуговування / ремонт" : "Запис обслуговування",
+    body: `<div class="f">
+      <label>Машина<select id="vM">${optsFrom(sorted("machines"), s.machineId, "— оберіть —")}</select></label>
+      <label>Вид<input id="vK" list="svcList" value="${esc(s.kind||"")}"></label>
+      <label>Статус<select id="vS">${opt("planned","Заплановано",s.status)}${opt("done","Зроблено",s.status)}</select></label>
+      <label>Дата<input id="vD" type="date" value="${esc(s.date||"")}"></label>
+      <label>Пробіг, км<input id="vKm" inputmode="decimal" value="${esc(s.km??"")}"></label>
+      <label>Мотогодини<input id="vMh" inputmode="decimal" value="${esc(s.mh??"")}"></label>
+      <label>Вартість, грн<input id="vC" inputmode="decimal" value="${esc(s.cost??"")}"></label>
+      <label>Виконавець<input id="vW" value="${esc(s.who||"")}"></label>
+      <label class="full">Що зроблено / запчастини<textarea id="vN">${esc(s.note||"")}</textarea></label>
+    </div><datalist id="svcList">${SERVICE_KINDS.map(k=>`<option value="${esc(k)}">`).join("")}</datalist>`,
+    onDelete: isNew ? null : async () => remove("service", s.id),
+    onSave: async (m) => { const machineId = val(m,"vM"); if(!machineId){ m.querySelector("#vM").focus(); return false; }
+      return !!(await save("service", Object.assign({}, s, { machineId, kind: val(m,"vK"), status: val(m,"vS"), date: val(m,"vD"), km: val(m,"vKm")?num(val(m,"vKm")):"", mh: val(m,"vMh")?num(val(m,"vMh")):"", cost: val(m,"vC")?num(val(m,"vC")):"", who: val(m,"vW"), note: val(m,"vN") }))); }
+  });
+}
+
+/* refs */
+function viewRefs(){
+  const T = state.refTab;
+  const tabs = [["products","Матеріали (ЗЗР, насіння, добрива)"],["implements","Обладнання"],["people","Люди"]];
+  let body = "";
+  if(T === "products"){
+    const list = sorted("products");
+    body = `<div class="filters"><span class="sp" style="flex:1"></span><button class="btn pri" type="button" data-act="newProduct">+ Матеріал</button></div>
+    <div class="tw"><table><thead><tr><th>Назва</th><th>Тип</th><th>Од. виміру</th><th>Діюча речовина / склад</th><th class="n">Ціна, грн/од.</th></tr></thead><tbody>
+    ${list.length ? PRODUCT_TYPES.map(t => { const g = list.filter(p => (p.type||"Інше")===t); return g.length ? `<tr class="grp"><td colspan="5">${esc(t)} <span class="muted">${g.length}</span></td></tr>` + g.map(p=>`<tr class="click" data-product="${esc(p.id)}"><td>${esc(p.name)}</td><td>${esc(p.type||"")}</td><td>${esc(p.unit||"")}</td><td>${esc(p.ai||"")}</td><td class="n">${p.price?fmt(num(p.price)):"—"}</td></tr>`).join("") : ""; }).join("")
+      : `<tr><td colspan="5"><div class="empty">Додайте препарати, насіння і добрива — вони потрібні для внесення в агроопераціях.</div></td></tr>`}</tbody></table></div>`;
+  } else if(T === "implements"){
+    const list = sorted("implements");
+    body = `<div class="filters"><span class="sp" style="flex:1"></span><button class="btn pri" type="button" data-act="newImpl">+ Обладнання</button></div>
+    <div class="tw"><table><thead><tr><th>Назва</th><th>Тип</th><th class="n">Ширина захвату, м</th><th>Інв. номер</th></tr></thead><tbody>
+    ${list.length ? list.map(p=>`<tr class="click" data-impl="${esc(p.id)}"><td>${esc(p.name)}</td><td>${esc(p.type||"")}</td><td class="n">${p.width?fmt(num(p.width),2):"—"}</td><td>${esc(p.inv||"")}</td></tr>`).join("") : `<tr><td colspan="4"><div class="empty">Плуги, дискові борони, сівалки, обприскувачі…</div></td></tr>`}</tbody></table></div>`;
+  } else {
+    const list = sorted("people");
+    body = `<div class="filters"><span class="sp" style="flex:1"></span><button class="btn pri" type="button" data-act="newPerson">+ Людина</button></div>
+    <div class="tw"><table><thead><tr><th>ПІБ</th><th>Посада</th><th>Телефон</th><th>Примітка</th></tr></thead><tbody>
+    ${list.length ? list.map(p=>`<tr class="click" data-person="${esc(p.id)}"><td>${esc(p.name)}</td><td>${esc(p.role||"")}</td><td>${esc(p.phone||"")}</td><td>${esc(p.note||"")}</td></tr>`).join("") : `<tr><td colspan="4"><div class="empty">Водії, механізатори, агрономи.</div></td></tr>`}</tbody></table></div>`;
+  }
+  return header("Довідники") + statusBanner() + `<div class="tabs">${tabs.map(([k,l])=>`<button type="button" class="${T===k?"on":""}" data-reftab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function simpleDialog(col, x, title, fields){
+  const isNew = !x; x = x || {};
+  openModal({ title: (isNew?"Новий запис: ":"") + title,
+    body: `<div class="f">${fields.map(([k, label, kind, opts]) => kind==="select" ? `<label>${esc(label)}<select id="s_${k}">${optsFrom(opts, x[k])}</select></label>` : `<label class="${kind==="area"?"full":""}">${esc(label)}${kind==="area"?`<textarea id="s_${k}">${esc(x[k]||"")}</textarea>`:`<input id="s_${k}" ${kind==="num"?'inputmode="decimal"':""} value="${esc(x[k]??"")}">`}</label>`).join("")}</div>`,
+    onDelete: isNew ? null : async () => remove(col, x.id),
+    onSave: async (m) => { const o = Object.assign({}, x); for(const [k,,kind] of fields){ const v = val(m,"s_"+k); o[k] = kind==="num" ? (v?num(v):"") : v; } if(!o.name){ m.querySelector("#s_name").focus(); return false; } return !!(await save(col, o)); }
+  });
+}
+const productFields = [["name","Назва"],["type","Тип","select",PRODUCT_TYPES],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["note","Примітка","area"]];
+const implFields = [["name","Назва"],["type","Тип"],["width","Ширина захвату, м","num"],["inv","Інвентарний номер"],["note","Примітка","area"]];
+const personFields = [["name","ПІБ"],["role","Посада","select",PEOPLE_ROLES],["phone","Телефон"],["note","Примітка","area"]];
+
+/* reports */
+function viewReports(){
+  const T = state.repTab;
+  const tabs = [["machines","Продуктивність машин"],["drivers","Продуктивність водіїв"],["apps","Внесення за культурами"],["harvest","Урожай"],["fuel","Пальне по полях"]];
+  const ts = S.tasks.filter(t => inPeriod(t.date));
+  let head = [], rows = [], nums = [];
+  if(T === "machines" || T === "drivers"){
+    const key = T === "machines" ? "machineId" : "driverId", col = T === "machines" ? "machines" : "people";
+    const g = {}; ts.forEach(t => { const k = t[key] || ""; const o = g[k] ||= { n:0, area:0, km:0, h:0, fuel:0, days:new Set() }; o.n++; o.area+=num(t.area); o.km+=num(t.kmField)+num(t.kmRoad); o.h+=hoursOf(t); o.fuel+=num(t.fuel); o.days.add(t.date); });
+    head = [T==="machines"?"Машина":"Водій","Днів роботи","Завдань","Оброблено, га","Га за день","Пробіг, км","Мотогодини","Пальне, л","л/га"];
+    rows = Object.entries(g).sort((a,b)=>b[1].area-a[1].area).map(([k,o]) => [nameOf(col,k)||"(не вказано)", o.days.size, o.n, o.area, o.days.size?o.area/o.days.size:0, o.km, o.h, o.fuel, o.area?o.fuel/o.area:0]);
+    nums = [1,2,3,4,5,6,7,8];
+  } else if(T === "apps"){
+    const g = {};
+    S.ops.filter(o => Number(o.season) === state.season).forEach(o => { const f = byId("fields", o.fieldId); const crop = f ? (fieldCrop(f, o.season) || "Не вказана") : "—"; const area = opDone(o) || (o.status==="done" ? opPlanned(o) : 0); const plannedA = opPlanned(o);
+      (o.applications||[]).forEach(a => { const p = byId("products", a.productId); const k = crop+"|"+a.productId; const x = g[k] ||= { crop, prod: p?p.name:"?", type: p?p.type:"", unit: a.unit, plan:0, fact:0, area:0, price: p?num(p.price):0 }; x.plan += num(a.rate)*plannedA; x.fact += num(a.rate)*area; x.area += area; }); });
+    head = ["Культура","Матеріал","Тип","Од.","План, к-сть","Факт, к-сть","Оброблено, га","Факт норма/га","Вартість факту, грн"];
+    rows = Object.values(g).sort((a,b)=>a.crop.localeCompare(b.crop,"uk")||a.prod.localeCompare(b.prod,"uk")).map(x => [x.crop, x.prod, x.type, x.unit, x.plan, x.fact, x.area, x.area?x.fact/x.area:0, x.price*x.fact]);
+    nums = [4,5,6,7,8];
+  } else if(T === "harvest"){
+    const g = {};
+    S.fields.filter(f=>!f.archived).forEach(f => { const s = fieldSeason(f); const c = s.crop || "Не вказана"; const x = g[c] ||= { area:0, harvA:0, t:0, planT:0 }; x.area += num(f.area); if(num(s.plannedYield)) x.planT += num(f.area)*num(s.plannedYield)/10; if(num(s.yield)){ x.harvA += num(f.area); x.t += num(f.area)*num(s.yield)/10; } });
+    head = ["Культура","Площа, га","Зібрано з, га","% зібрано","Урожай, т","Урожайність, ц/га","План, т","Виконання плану, %"];
+    rows = Object.entries(g).sort((a,b)=>b[1].area-a[1].area).map(([c,x]) => [c, x.area, x.harvA, x.area?x.harvA/x.area*100:0, x.t, x.harvA?x.t*10/x.harvA:0, x.planT, x.planT?x.t/x.planT*100:0]);
+    nums = [1,2,3,4,5,6,7];
+  } else {
+    const g = {}; ts.filter(t=>t.fieldId).forEach(t => { const f = byId("fields", t.fieldId); const k = t.fieldId; const x = g[k] ||= { name: f?f.name:"?", group: f?f.group:"", area:0, fuel:0, n:0 }; x.area += num(t.area); x.fuel += num(t.fuel); x.n++; });
+    head = ["Поле","Група","Завдань","Оброблено, га","Пальне, л","л/га"];
+    rows = Object.values(g).sort((a,b)=>b.fuel-a.fuel).map(x => [x.name, x.group, x.n, x.area, x.fuel, x.area?x.fuel/x.area:0]);
+    nums = [2,3,4,5];
+  }
+  state._report = { name: (tabs.find(t=>t[0]===T)||[])[1], head, rows };
+  const needsPeriod = ["machines","drivers","fuel"].includes(T);
+  return header("Звіти", `<button class="btn" type="button" data-act="csvReport">Експорт у CSV</button>`) + statusBanner() +
+    `<div class="tabs">${tabs.map(([k,l])=>`<button type="button" class="${T===k?"on":""}" data-reptab="${k}">${esc(l)}</button>`).join("")}</div>` +
+    (needsPeriod ? periodBar() : `<p class="note">Сезон ${state.season} (змінюється внизу меню).</p>`) +
+    (rows.length ? `<div class="tw"><table><thead><tr>${head.map((h,i)=>`<th class="${nums.includes(i)?"n":""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>
+      ${rows.map(r=>`<tr>${r.map((v,i)=>`<td class="${nums.includes(i)?"n":""}">${nums.includes(i) ? (v? fmt(v, Number.isInteger(v)?0:(/л\/га|ц\/га|норма/.test(head[i])?1:2)) : "—") : (i===0 && T!=="fuel" && (T==="apps"||T==="harvest") ? cropTag(v) : esc(v))}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div>` : `<div class="card"><div class="empty"><b>Даних для звіту немає</b>${needsPeriod?"Змініть період або внесіть завдання техніки.":"Внесіть поля й агрооперації сезону."}</div></div>`);
+}
+
+/* ---------- demo data ---------- */
+async function makeDemo(){
+  const D = { demo: true };
+  const base = [30.43, 48.39];
+  const rect = (dx, dy, w, h) => { const x0 = base[0]+dx, y0 = base[1]+dy; return [[[x0,y0],[x0+w,y0],[x0+w,y0+h],[x0,y0+h],[x0,y0]]]; };
+  toast("Створюю приклад…");
+  const P = {};
+  for(const [k,o] of Object.entries({ p1:{name:"Соломонюк Дмитро",role:"Механізатор"}, p2:{name:"Мельник Олександр",role:"Водій"}, p3:{name:"Лук’яник Олександр",role:"Агроном"} })) P[k] = await save("people", Object.assign({}, o, D));
+  const I = {};
+  for(const [k,o] of Object.entries({ i1:{name:"Борона дискова 6 м",type:"Дискова борона",width:6}, i2:{name:"Обприскувач 24 м",type:"Обприскувач",width:24}, i3:{name:"Сівалка 12 рядів",type:"Сівалка",width:8.4} })) I[k] = await save("implements", Object.assign({}, o, D));
+  const PR = {};
+  for(const [k,o] of Object.entries({ a:{name:"Гліфосат 480",type:"ЗЗР",unit:"л",price:180}, b:{name:"Гібрид кукурудзи (приклад)",type:"Насіння",unit:"п.о.",price:6500}, c:{name:"Аміачна селітра",type:"Добрива",unit:"кг",price:18}, d:{name:"Дизпаливо",type:"Паливо",unit:"л",price:56} })) PR[k] = await save("products", Object.assign({}, o, D));
+  const M = {};
+  for(const [k,o] of Object.entries({ m1:{name:"John Deere 7920",type:"Агро",subtype:"Трактор",make:"John Deere",model:"7920",fuel:"Дизель",normHa:9,driverId:P.p1,tracker:"Wialon"}, m2:{name:"МТЗ 1221.2",type:"Агро",subtype:"Трактор",make:"МТЗ",model:"1221.2",fuel:"Дизель",normHa:6}, m3:{name:"Volvo тягач",type:"Транспорт",subtype:"Тягач",make:"Volvo",fuel:"Дизель",normKm:32,driverId:P.p2} })) M[k] = await save("machines", Object.assign({}, o, D));
+  const s = state.season;
+  const FL = [["ГОЛ-01","Голованівськ",rect(0,0,0.012,0.008),"Ріпак озимий","Пшениця озима"],["ГОЛ-02","Голованівськ",rect(0.014,0,0.01,0.01),"Кукурудза","Соняшник"],["ГОЛ-03","Голованівськ",rect(0,0.01,0.02,0.007),"Соняшник","Кукурудза"],["ХРИ-01","Христинівка",rect(0.03,0.004,0.016,0.012),"Пшениця озима","Ріпак озимий"],["ХРИ-02","Христинівка",rect(0.03,-0.012,0.012,0.01),"Кукурудза","Соя"]];
+  const F = [];
+  for(const [name, group, contours, crop, prev] of FL){ const area = +contourArea(contours).toFixed(2); F.push(await save("fields", { name, group, contours, area, calcArea: area, seasons: { [s]: { crop, plannedYield: crop==="Кукурудза"?80:crop==="Соняшник"?28:45 }, [s-1]: { crop: prev, yield: 35 } }, demo:true })); }
+  const mk = (n, type, fi, status, extra={}) => save("ops", Object.assign({ number:n, workType:type, season:s, fieldId:F[fi], status, plannedFrom: today(), applications:[], machineIds:[], driverIds:[] }, extra, D));
+  const o1 = await mk(1,"Дискування",1,"done",{ factFrom: today(), machineIds:[M.m1], driverIds:[P.p1], implementId:I.i1 });
+  await mk(2,"Обприскування",2,"progress",{ machineIds:[M.m2], applications:[{productId:PR.a, rate:2.5, unit:"л"}], doneArea: 20 });
+  await mk(3,"Посів",1,"planned",{ applications:[{productId:PR.b, rate:1, unit:"п.о."},{productId:PR.c, rate:150, unit:"кг"}] });
+  await mk(4,"Збір врожаю",3,"done",{ factFrom: today() });
+  await save("tasks", { date: today(), start:"07:30", end:"19:00", machineId:M.m1, driverId:P.p1, implementId:I.i1, opId:o1, fieldId:F[1], area: 60, kmField: 48, kmRoad: 12, fuel: 540, demo:true });
+  await save("tasks", { date: today(), start:"08:00", end:"16:00", machineId:M.m3, driverId:P.p2, work:"Перевезення зерна на елеватор", kmRoad: 220, fuel: 70, demo:true });
+  await save("service", { machineId:M.m1, kind:"ТО-2", status:"planned", date: today(), demo:true });
+  await save("service", { machineId:M.m2, kind:"Заміна мастила в двигуні", status:"done", date: today(), cost: 4200, demo:true });
+  state.mapVB = {};
+  toast("Приклад створено");
+}
+async function dropDemo(){
+  toast("Видаляю приклад…");
+  for(const c of COLS) for(const x of [...S[c]]) if(x.demo) await remove(c, x.id);
+  state.fieldSel = null; state.machineId = null; state.mapVB = {};
+  toast("Приклад видалено");
+}
+
+/* ---------- render & events ---------- */
+const VIEWS = { dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
+function render(){
+  const main = document.getElementById("main");
+  const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
+  main.innerHTML = (VIEWS[state.view] || viewDash)();
+  document.querySelectorAll(".rail a").forEach(a => a.classList.toggle("on", a.dataset.v === state.view));
+  attachMaps();
+  if(focusId){ const el = document.getElementById(focusId); if(el){ el.focus(); try { if(caret!=null) el.setSelectionRange(caret, caret); } catch(e){} } }
+}
+function setPeriod(k){
+  const d = new Date(), iso = x => x.toISOString().slice(0,10);
+  if(k==="today") state.period = { from: iso(d), to: iso(d) };
+  if(k==="week"){ const a = new Date(d); a.setDate(a.getDate()-6); state.period = { from: iso(a), to: iso(d) }; }
+  if(k==="month") state.period = { from: iso(new Date(d.getFullYear(), d.getMonth(), 1, 12)), to: iso(d) };
+  if(k==="season") state.period = { from: (state.season-1)+"-07-01", to: state.season+"-12-31" };
+  if(k==="year") state.period = { from: d.getFullYear()+"-01-01", to: iso(d) };
+}
+const main = document.getElementById("main");
+main.addEventListener("click", e => {
+  const t = e.target.closest("[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  if(!t) return;
+  const d = t.dataset;
+  if(d.act){
+    const a = d.act;
+    if(a==="demo") return makeDemo();
+    if(a==="undemo") return confirmBox("Видалити всі записи прикладу?", dropDemo);
+    if(a==="import") return importDialog();
+    if(a==="newField") return fieldDialog(null);
+    if(a==="drawField"){ toast("Клацайте по краях поля на карті"); return startDraw("fields", rings => fieldDialog(null, rings)); }
+    if(a==="redraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); return startDraw("fields", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); }
+    if(a==="editField") return fieldDialog(byId("fields", d.id));
+    if(a==="newOp") return opDialog(null, d.field);
+    if(a==="newMachine") return machineDialog(null);
+    if(a==="editMachine") return machineDialog(byId("machines", d.id));
+    if(a==="backMach"){ state.machineId = null; return render(); }
+    if(a==="newTask") return taskDialog(null, d.machine ? { machineId: d.machine } : {});
+    if(a==="newService") return serviceDialog(null, d.machine ? { machineId: d.machine } : {});
+    if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
+    if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
+    if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
+    if(a==="csvFields") return exportCsv("Поля "+state.season, ["Поле","Група","Площа, га","Офіційна, га","Культура","Сорт","Посів","Збирання","План, ц/га","Факт, ц/га"], S.fields.map(f=>{ const s=fieldSeason(f); return [f.name,f.group,num(f.area),f.officialArea,s.crop,s.variety,s.sowDate,s.harvestDate,s.plannedYield,s.yield]; }));
+    if(a==="csvRot"){ const ys=[state.season-3,state.season-2,state.season-1,state.season,state.season+1]; return exportCsv("Сівозміна", ["Поле","Група","Площа, га",...ys.map(String)], S.fields.map(f=>[f.name,f.group,num(f.area),...ys.map(y=>fieldCrop(f,y))])); }
+    if(a==="csvOps") return exportCsv("Агрооперації "+state.season, ["№","Група","Операція","Поле","Культура","Статус","План з","План до","Факт з","Факт до","План, га","Виконано, га","Внесення","Техніка","Водії","Відповідальний"], S.ops.filter(o=>Number(o.season)===state.season).map(o=>{ const f=byId("fields",o.fieldId)||{}; return [o.number,opGroup(o),opTitle(o),f.name,fieldCrop(f,o.season),STATUS[o.status||"planned"],o.plannedFrom,o.plannedTo,o.factFrom,o.factTo,opPlanned(o),opDone(o),(o.applications||[]).map(x=>nameOf("products",x.productId)+" "+x.rate+" "+x.unit+"/га").join(", "),(o.machineIds||[]).map(i=>nameOf("machines",i)).join(", "),(o.driverIds||[]).map(i=>nameOf("people",i)).join(", "),o.responsible]; }));
+    if(a==="csvMach") return exportCsv("Машини", ["Машина","Тип","Підтип","Виробник","Модель","Держномер","Пальне","Трекер","Завдань","Га","Км","Мотогод.","Пальне, л"], sorted("machines").map(x=>{ const s=machineStats(x.id); return [x.name,x.type,x.subtype,x.make,x.model,x.plate,x.fuel,x.tracker,s.n,s.area,s.km,s.h,s.fuel]; }));
+    if(a==="csvTasks") return exportCsv("Завдання техніки", ["Дата","Початок","Кінець","Машина","Водій","Агрегат","Робота","Поле","Га","Км поле","Км дорога","Мотогод.","Пальне, л","Заправлено, л"], S.tasks.filter(t=>inPeriod(t.date)).map(t=>{ const op=byId("ops",t.opId); return [t.date,t.start,t.end,nameOf("machines",t.machineId),nameOf("people",t.driverId),nameOf("implements",t.implementId),op?opTitle(op):t.work,nameOf("fields",t.fieldId),t.area,t.kmField,t.kmRoad,hoursOf(t),t.fuel,t.refuel]; }));
+    if(a==="csvReport"){ const r = state._report; if(r) return exportCsv(r.name, r.head, r.rows.map(row=>row.map(v=>typeof v==="number"?+v.toFixed(2):v))); }
+    return;
+  }
+  if(d.per){ setPeriod(d.per); return render(); }
+  if(d.reftab){ state.refTab = d.reftab; return render(); }
+  if(d.reptab){ state.repTab = d.reptab; return render(); }
+  if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.field){ state.fieldSel = d.field; return render(); }
+  if(d.op) return opDialog(byId("ops", d.op));
+  if(d.machine){ state.machineId = d.machine; return render(); }
+  if(d.task) return taskDialog(byId("tasks", d.task));
+  if(d.service) return serviceDialog(byId("service", d.service));
+  if(d.product) return simpleDialog("products", byId("products", d.product), "матеріал", productFields);
+  if(d.impl) return simpleDialog("implements", byId("implements", d.impl), "обладнання", implFields);
+  if(d.person) return simpleDialog("people", byId("people", d.person), "людина", personFields);
+});
+main.addEventListener("keydown", e => { if((e.key==="Enter"||e.key===" ") && e.target.dataset && e.target.dataset.rot){ e.preventDefault(); e.target.click(); } });
+main.addEventListener("input", e => {
+  const id = e.target.id;
+  if(id==="fq"){ state.fieldQ = e.target.value; render(); }
+  if(id==="oq"){ state.ops.q = e.target.value; render(); }
+  if(id==="mq"){ state.machQ = e.target.value; render(); }
+});
+main.addEventListener("change", e => {
+  const id = e.target.id;
+  if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
+  if(id==="og"){ state.ops.group = e.target.value; render(); }
+  if(id==="os"){ state.ops.status = e.target.value; render(); }
+  if(id==="pFrom" && e.target.value){ state.period.from = e.target.value; render(); }
+  if(id==="pTo" && e.target.value){ state.period.to = e.target.value; render(); }
+});
+document.addEventListener("click", e => { if(e.target.id === "menuBtn") document.getElementById("rail").classList.toggle("open"); else if(!e.target.closest("#rail")) document.getElementById("rail").classList.remove("open"); });
+document.addEventListener("keydown", e => { if(e.key === "Escape" && document.getElementById("modalRoot").innerHTML) closeModal(); });
+
+const seasonSel = document.getElementById("seasonSel");
+function fillSeasons(){ const c = curSeason(); const ys = []; for(let y=c-5; y<=c+2; y++) ys.push(y); if(!ys.includes(state.season)) ys.push(state.season); seasonSel.innerHTML = ys.sort().map(y=>opt(y, "Сезон "+y, state.season)).join(""); }
+seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("season", state.season); render(); };
+function route(){ const h = (location.hash||"").replace("#",""); state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
+window.addEventListener("hashchange", route);
+fillSeasons(); route();
+document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; COLS.forEach(c => S[c] = []); render(); showLogin(); };
+initDb();
+</script>
+</body>
+</html>
