@@ -316,6 +316,25 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.da
     }
     return json({ forecast, history });
   }
+  if (path === "/api/fieldwx" && req.method === "GET") {
+    const lat = Number(url.searchParams.get("lat")), lon = Number(url.searchParams.get("lon"));
+    if (!(lat > 40 && lat < 55 && lon > 20 && lon < 45)) return json({ error: "bad coordinates" }, 400);
+    const q = "latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4) + "&timezone=Europe%2FKyiv";
+    const get = async (u) => { try { const r = await fetch(u, { cf: { cacheTtl: 3600, cacheEverything: true } }); return r.ok ? r.json() : null; } catch (e) { return null; } };
+    const fc = await get("https://api.open-meteo.com/v1/forecast?" + q + "&current=temperature_2m,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code,wind_speed_10m&forecast_hours=24&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,weather_code,wind_speed_10m_max&past_days=7&forecast_days=14");
+    let from = url.searchParams.get("from") || ""; const end = new Date(Date.now() - 5 * 864e5).toISOString().slice(0, 10);
+    const series = { date: [], tmax: [], tmin: [], precip: [], sm0: [], sm1: [], sm2: [] };
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from) && from < end && (new Date(end) - new Date(from)) / 864e5 < 500) {
+      const ar = await get("https://archive-api.open-meteo.com/v1/archive?" + q + "&start_date=" + from + "&end_date=" + end + "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&hourly=soil_moisture_0_to_7cm,soil_moisture_7_to_28cm,soil_moisture_28_to_100cm");
+      if (ar && ar.daily) {
+        const sm = {}; if (ar.hourly) ar.hourly.time.forEach((t, i) => { const d = t.slice(0, 10); const o = sm[d] ||= [0, 0, 0, 0]; const v = [ar.hourly.soil_moisture_0_to_7cm[i], ar.hourly.soil_moisture_7_to_28cm[i], ar.hourly.soil_moisture_28_to_100cm[i]]; if (v[0] != null) { o[0] += v[0]; o[1] += v[1]; o[2] += v[2]; o[3]++; } });
+        ar.daily.time.forEach((d, i) => { series.date.push(d); series.tmax.push(ar.daily.temperature_2m_max[i]); series.tmin.push(ar.daily.temperature_2m_min[i]); series.precip.push(ar.daily.precipitation_sum[i]); const o = sm[d]; series.sm0.push(o && o[3] ? +(o[0] / o[3]).toFixed(3) : null); series.sm1.push(o && o[3] ? +(o[1] / o[3]).toFixed(3) : null); series.sm2.push(o && o[3] ? +(o[2] / o[3]).toFixed(3) : null); });
+      }
+    }
+    if (fc && fc.daily) { const last = series.date[series.date.length - 1] || ""; const td = new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);
+      fc.daily.time.forEach((d, i) => { if (d > last && d < td) { series.date.push(d); series.tmax.push(fc.daily.temperature_2m_max[i]); series.tmin.push(fc.daily.temperature_2m_min[i]); series.precip.push(fc.daily.precipitation_sum[i]); series.sm0.push(null); series.sm1.push(null); series.sm2.push(null); } }); }
+    return json({ current: fc && fc.current, hourly: fc && fc.hourly, daily: fc && fc.daily, series });
+  }
   if (path === "/api/wms" && req.method === "GET") {
     const bbox = url.searchParams.get("bbox") || "";
     if (!/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(bbox)) return json({ error: "bad bbox" }, 400);
