@@ -530,6 +530,12 @@ async function aoPush(env, a) {
     const del = results.map((x) => x.id).filter((id) => !ids.has(id)); removed = del.length;
     for (let i = 0; i < del.length; i += 100) await env.DB.batch(del.slice(i, i + 100).map((id) => env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, col, id)));
   }
+  if (Array.isArray(a.all_ids)) {
+    const keep = new Set(a.all_ids.map(String)); recs.forEach((r) => keep.add(String(r.id || (r.data && r.data.id) || "")));
+    const { results } = await env.DB.prepare("SELECT id FROM docs WHERE col = ? AND deleted = 0").bind(col).all();
+    const del = results.map((x) => x.id).filter((id) => !keep.has(id)); removed += del.length;
+    for (let i = 0; i < del.length; i += 100) await env.DB.batch(del.slice(i, i + 100).map((id) => env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, col, id)));
+  }
   if (Array.isArray(a.deleted_ids) && a.deleted_ids.length) { const del = a.deleted_ids.map(String).filter((id) => ID_RE.test(id)); removed += del.length;
     for (let i = 0; i < del.length; i += 100) await env.DB.batch(del.slice(i, i + 100).map((id) => env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, col, id))); }
   await env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES ('settings', 'agrooblik', ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = json_set(docs.data, '$.lastSync', ?), updated = excluded.updated, deleted = 0").bind(JSON.stringify({ lastSync: updated }), updated, updated).run();
@@ -537,7 +543,7 @@ async function aoPush(env, a) {
 }
 const AO_TOOLS = [
   { name: "agrooblik_status", description: "Стан даних АгроОбліку в програмі КЛГ Поле: скільки записів кожної колекції вже отримано і найбільше значення поля ts (для інкрементальної синхронізації: надсилайте записи з ts більшим за max_ts).", inputSchema: { type: "object", properties: {} } },
-  { name: "agrooblik_push", description: "Записати в КЛГ Поле записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
+  { name: "agrooblik_push", description: "Записати в КЛГ Поле записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку. all_ids: повний список id колекції в АгроОбліку (можна надіслати з порожнім records окремим викликом після всіх частин) — усе, чого в ньому немає, буде позначено видаленим. Надсилайте не більше 500 записів за виклик.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } }, all_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
 ];
 async function handleMcp(req, env) {
   if (req.method === "GET") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
