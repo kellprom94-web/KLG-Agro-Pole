@@ -176,6 +176,7 @@ tr:last-child td{border-bottom:0}
     <a href="#service" data-v="service">Обслуговування</a>
     <div class="sec">Інше</div>
     <a href="#land" data-v="land">Земельний банк</a>
+    <a href="#wms" data-v="wms">Склад</a>
     <a href="#refs" data-v="refs">Довідники</a>
     <a href="#reports" data-v="reports">Звіти</a>
     <div class="season">
@@ -204,12 +205,12 @@ const WORKS = {
 };
 const GROUP_COLOR = {"Обробка ґрунту":"#b9852a","Внесення":"#3a6ea5","Збір врожаю":"#2e7d4f","Інше":"#7a7a7a"};
 const STATUS = {planned:"Заплановано",progress:"В процесі",done:"Виконано",cancel:"Скасовано"};
-const PRODUCT_TYPES = ["ЗЗР","Насіння","Добрива","Паливо","Інше"];
+const PRODUCT_TYPES = ["ЗЗР","Насіння","Добрива","Паливо","Запчастини","Витратний матеріал","Інше"];
 const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -228,6 +229,7 @@ const state = {
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
   landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
+  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover",
   mapVB: {}
 };
 
@@ -826,6 +828,7 @@ function opDialog(o, presetField){
       <label class="full">Примітка<textarea id="oNote">${esc(o.note||"")}</textarea></label>
     </div>
     ${linked.length?`<div class="note">Пов’язані завдання техніки: ${linked.length}, разом ${fmt(sum(linked,t=>t.area))} га, пальне ${fmt(sum(linked,t=>t.fuel),0)} л.</div>`:""}`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="oIssue">Списати зі складу</button>`,
     onDelete: isNew ? null : async () => remove("ops", o.id),
     onSave: async (m) => {
       const fieldId = val(m,"oField"); if(!fieldId){ m.querySelector("#oField").focus(); return false; }
@@ -837,6 +840,7 @@ function opDialog(o, presetField){
         responsible: val(m,"oResp"), applications, machineIds: checked(m,"oM"), driverIds: checked(m,"oD"), implementId: val(m,"oImpl"), note: val(m,"oNote") })));
     }
   });
+  { const oi = m.querySelector("#oIssue"); if(oi) oi.onclick = () => { closeModal(); issueFromOp(o); }; }
   m.querySelector("#addApp").onclick = () => m.querySelector("#apps").insertAdjacentHTML("beforeend", appRowHtml());
   m.querySelector("#apps").addEventListener("click", e => { if(e.target.classList.contains("aX")) e.target.closest(".approw").remove(); });
   m.querySelector("#apps").addEventListener("change", e => { if(e.target.classList.contains("aP")){ const p = byId("products", e.target.value); if(p && p.unit){ const u = e.target.closest(".approw").querySelector(".aU"); if([...u.options].some(x=>x.value===p.unit)) u.value = p.unit; } } });
@@ -1043,7 +1047,7 @@ function simpleDialog(col, x, title, fields){
     onSave: async (m) => { const o = Object.assign({}, x); for(const [k,,kind] of fields){ const v = val(m,"s_"+k); o[k] = kind==="num" ? (v?num(v):"") : v; } if(!o.name){ m.querySelector("#s_name").focus(); return false; } return !!(await save(col, o)); }
   });
 }
-const productFields = [["name","Назва"],["type","Тип","select",PRODUCT_TYPES],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["note","Примітка","area"]];
+const productFields = [["name","Назва"],["type","Тип","select",PRODUCT_TYPES],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
 const implFields = [["name","Назва"],["type","Тип"],["width","Ширина захвату, м","num"],["inv","Інвентарний номер"],["note","Примітка","area"]];
 const personFields = [["name","ПІБ"],["role","Посада","select",PEOPLE_ROLES],["phone","Телефон"],["note","Примітка","area"]];
 
@@ -1691,6 +1695,332 @@ async function makeLandDemo(F){
   const l1 = byId("leases", L1); if(l1){ const g = Math.round(rentForYear(l1, y) / 2); const t = g * 0.23; await save("payments", Object.assign({ docId: L1, ownerId: l1.ownerId, year: y, date: today(), kind: "Грошова", gross: g, tax: +t.toFixed(2), net: +(g - t).toFixed(2) }, D)); }
 }
 
+/* ---------- warehouse (WMS) ---------- */
+const WH_TYPES = ["Головний склад","Склад ЗЗР","Склад добрив","Насіннєвий склад","Склад запчастин","Паливний склад / АЗС","Зерносклад","Інше"];
+const DOC_KINDS = {
+  receipt:   { title: "Надходження", one: "Документ надходження", to: true, cp: true, price: true },
+  issue:     { title: "Вибуття", one: "Документ вибуття", from: true, target: true, price: false },
+  transfer:  { title: "Внутрішні переміщення", one: "Переміщення", from: true, to: true },
+  inventory: { title: "Відомості інвентаризації", one: "Відомість інвентаризації", to: true, inv: true },
+  production:{ title: "Акти виробництва", one: "Акт виробництва", from: true, to: true, prod: true }
+};
+const WH_STATUS = { draft: ["Чернетка","st-planned"], posted: ["Проведено","st-done"], cancel: ["Скасовано","st-cancel"] };
+const REQ_STATUS = { new: ["Новий","st-planned"], approved: ["Погоджено","st-done"], rejected: ["Відхилено","st-cancel"], done: ["Виконано","st-done"] };
+const whPill = s => { const [t, c] = WH_STATUS[s || "draft"] || WH_STATUS.draft; return `<span class="pill ${c}">${t}</span>`; };
+const reqPill = s => { const [t, c] = REQ_STATUS[s || "new"] || REQ_STATUS.new; return `<span class="pill ${c}">${t}</span>`; };
+const prodName = id => nameOf("products", id);
+const prodUnit = id => (byId("products", id) || {}).unit || "";
+const whName = id => nameOf("warehouses", id);
+const lineSum = l => num(l.qty) * num(l.price);
+
+/* stock engine: chronological replay of posted documents, weighted average cost */
+function stockReplay(until){
+  const st = {}; const key = (w, p) => w + "|" + p;
+  const get = (w, p) => st[key(w, p)] ||= { w, p, qty: 0, value: 0 };
+  const avg = x => x.qty > 0 ? x.value / x.qty : 0;
+  const moves = [];
+  const docs = S.whdocs.filter(d => d.status === "posted" && (!until || (d.date || "") <= until)).sort((a,b) => ((a.date||"") + (a.createdAt||"")).localeCompare((b.date||"") + (b.createdAt||"")));
+  for(const d of docs){
+    const lines = d.lines || [];
+    if(d.kind === "receipt") lines.forEach(l => { const x = get(d.to, l.productId); x.qty += num(l.qty); x.value += lineSum(l); moves.push({ d, l, w: d.to, p: l.productId, qty: num(l.qty), value: lineSum(l) }); });
+    if(d.kind === "issue") lines.forEach(l => { const x = get(d.from, l.productId); const c = avg(x) * num(l.qty); x.qty -= num(l.qty); x.value -= c; moves.push({ d, l, w: d.from, p: l.productId, qty: -num(l.qty), value: -c }); });
+    if(d.kind === "transfer") lines.forEach(l => { const a = get(d.from, l.productId), b = get(d.to, l.productId); const c = avg(a) * num(l.qty); a.qty -= num(l.qty); a.value -= c; b.qty += num(l.qty); b.value += c; moves.push({ d, l, w: d.from, p: l.productId, qty: -num(l.qty), value: -c }, { d, l, w: d.to, p: l.productId, qty: num(l.qty), value: c }); });
+    if(d.kind === "inventory") lines.forEach(l => { const x = get(d.to, l.productId); const diff = num(l.fact) - x.qty; const c = (avg(x) || num(l.price)) * diff; x.qty += diff; x.value += c; if(Math.abs(diff) > 1e-9) moves.push({ d, l, w: d.to, p: l.productId, qty: diff, value: c }); });
+    if(d.kind === "production"){
+      let cost = 0;
+      (d.inputs || []).forEach(l => { const x = get(d.from, l.productId); const c = avg(x) * num(l.qty); cost += c; x.qty -= num(l.qty); x.value -= c; moves.push({ d, l, w: d.from, p: l.productId, qty: -num(l.qty), value: -c }); });
+      const outQty = sum(lines, l => l.qty);
+      lines.forEach(l => { const x = get(d.to, l.productId); const v = num(l.price) ? lineSum(l) : (outQty ? cost * num(l.qty) / outQty : 0); x.qty += num(l.qty); x.value += v; moves.push({ d, l, w: d.to, p: l.productId, qty: num(l.qty), value: v }); });
+    }
+  }
+  return { st, moves, avg };
+}
+function stockOf(w, p, until){ const x = stockReplay(until).st[w + "|" + p]; return x ? x.qty : 0; }
+
+function viewWms(){
+  const T = state.wmsTab;
+  const tabs = [["stock","Залишки"],["receipt","Надходження"],["issue","Вибуття"],["transfer","Переміщення"],["requests","Запити"],["inventory","Інвентаризація"],["invoices","Вхідні рахунки"],["production","Акти виробництва"],["items","Номенклатура"],["prices","Прайс-листи"],["warehouses","Склади"],["units","Одиниці виміру"],["reports","Звіти"]];
+  let body;
+  if(DOC_KINDS[T]) body = wmsDocList(T);
+  else body = ({ stock: wmsStock, requests: wmsRequests, invoices: wmsInvoices, items: wmsItems, prices: wmsPrices, warehouses: wmsWarehouses, units: wmsUnits, reports: wmsReports }[T] || wmsStock)();
+  return header("Склад", `<button class="btn" type="button" data-act="whNew" data-kind="receipt">+ Надходження</button><button class="btn" type="button" data-act="whNew" data-kind="issue">+ Вибуття</button><button class="btn pri" type="button" data-act="whNew" data-kind="transfer">+ Переміщення</button>`) + statusBanner() +
+    `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-wmstab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function whFilter(withAll){ return `<select id="whSel">${withAll ? opt("", "Усі склади", state.whSel) : ""}${sorted("warehouses").map(w => opt(w.id, w.name, state.whSel)).join("")}</select>`; }
+function wmsStock(){
+  const { st, avg } = stockReplay(state.stockDate || "");
+  const q = (state.wmsQ || "").toLowerCase();
+  const rows = Object.values(st).filter(x => Math.abs(x.qty) > 1e-9 && (!state.whSel || x.w === state.whSel)).map(x => ({ ...x, prod: byId("products", x.p) || {}, wh: byId("warehouses", x.w) || {} }))
+    .filter(r => !q || (r.prod.name || "").toLowerCase().includes(q) || (r.prod.type || "").toLowerCase().includes(q)).sort((a,b) => (a.wh.name||"").localeCompare(b.wh.name||"","uk") || (a.prod.type||"").localeCompare(b.prod.type||"","uk") || (a.prod.name||"").localeCompare(b.prod.name||"","uk"));
+  let lastW = null;
+  return `<div class="filters"><input id="wq" placeholder="Пошук номенклатури" value="${esc(state.wmsQ||"")}" style="flex:1;min-width:200px">${whFilter(true)}<span class="muted">на дату</span><input type="date" id="stockDate" value="${esc(state.stockDate||"")}"><button class="btn sm" type="button" data-act="csvStock">Експорт</button></div>
+  <div class="kpis"><div class="kpi"><b>${rows.length}</b><span>позицій із залишком</span></div><div class="kpi"><b>${fmt0(sum(rows, r => r.value))}</b><span>грн вартість залишків</span></div><div class="kpi"><b style="color:${rows.some(r=>r.qty<0)?"var(--bad)":"inherit"}">${rows.filter(r => r.qty < 0).length}</b><span>від’ємних залишків</span></div></div>
+  ${rows.length ? `<div class="tw"><table><thead><tr><th>Номенклатура</th><th>Категорія</th><th class="n">Кількість</th><th>Од.</th><th class="n">Середня ціна, грн</th><th class="n">Вартість, грн</th></tr></thead><tbody>
+  ${rows.map(r => { let g = ""; if(r.w !== lastW){ lastW = r.w; const wl = rows.filter(x => x.w === r.w); g = `<tr class="grp"><td colspan="5">${esc(r.wh.name || "Склад не вказано")}</td><td class="n">${fmt(sum(wl, x => x.value))}</td></tr>`; }
+    return g + `<tr class="click" data-stockitem="${esc(r.p)}"><td>${esc(r.prod.name || "?")}</td><td>${esc(r.prod.type || "")}</td><td class="n" style="color:${r.qty<0?"var(--bad)":"inherit"}">${fmt(r.qty, 3)}</td><td>${esc(r.prod.unit || "")}</td><td class="n">${fmt(avg(r))}</td><td class="n">${fmt(r.value)}</td></tr>`; }).join("")}
+  </tbody></table></div>` : `<div class="card"><div class="empty"><b>Залишків немає</b>Створіть склад і проведіть документ надходження.</div></div>`}`;
+}
+function docTotal(d){ return d.kind === "production" ? sum(d.lines || [], lineSum) : sum(d.lines || [], lineSum); }
+function wmsDocList(kind){
+  const K = DOC_KINDS[kind]; const q = (state.wmsQ || "").toLowerCase();
+  const list = S.whdocs.filter(d => d.kind === kind && (!state.whSel || d.from === state.whSel || d.to === state.whSel) && inPeriod(d.date)
+    && (!q || [d.number, cpName(d.counterpartyId), d.note, ...(d.lines||[]).map(l => prodName(l.productId))].join(" ").toLowerCase().includes(q)))
+    .sort((a,b) => ((b.date||"") + (b.number||"")).localeCompare((a.date||"") + (a.number||"")));
+  return periodBar() + `<div class="filters"><input id="wq" placeholder="Пошук: номер, контрагент, номенклатура" value="${esc(state.wmsQ||"")}" style="flex:1;min-width:200px">${whFilter(true)}<button class="btn sm" type="button" data-act="csvWhDocs" data-kind="${kind}">Експорт</button><button class="btn pri" type="button" data-act="whNew" data-kind="${kind}">+ ${esc(K.one)}</button></div>
+  <div class="tw"><table><thead><tr><th>Статус</th><th>Номер</th><th>Дата</th>${K.cp?"<th>Контрагент</th>":""}${K.from?"<th>Зі складу</th>":""}${K.to?"<th>На склад</th>":""}${K.target?"<th>Призначення</th>":""}<th>Номенклатура</th><th class="n">Сума, грн</th><th>Додаткова інформація</th></tr></thead><tbody>
+  ${list.length ? list.map(d => `<tr class="click" data-whdoc="${esc(d.id)}"><td>${whPill(d.status)}</td><td><b>${esc(d.number||"")}</b></td><td>${fdate(d.date)}</td>${K.cp?`<td>${esc(cpName(d.counterpartyId)||"—")}</td>`:""}${K.from?`<td>${esc(whName(d.from)||"—")}</td>`:""}${K.to?`<td>${esc(whName(d.to)||"—")}</td>`:""}${K.target?`<td>${esc(issueTarget(d))}</td>`:""}
+    <td>${(d.lines||[]).slice(0,3).map(l => esc(prodName(l.productId)) + " " + fmt(num(kind==="inventory"?l.fact:l.qty),3) + " " + esc(prodUnit(l.productId))).join("<br>")}${(d.lines||[]).length>3?`<div class="note">+${d.lines.length-3}</div>`:""}</td><td class="n">${docTotal(d)?fmt(docTotal(d)):"—"}</td><td>${esc(d.note||"")}</td></tr>`).join("")
+    : `<tr><td colspan="9"><div class="empty">Документів за період немає.</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function issueTarget(d){
+  const parts = [];
+  if(d.opId){ const o = byId("ops", d.opId); if(o) parts.push("№" + o.number + " " + opTitle(o)); }
+  if(d.fieldId) parts.push(nameOf("fields", d.fieldId));
+  if(d.machineId) parts.push(nameOf("machines", d.machineId));
+  if(d.purpose) parts.push(d.purpose);
+  return parts.join(" · ") || "—";
+}
+function nextNumber(kind){ const pre = { receipt: "НХ", issue: "ВБ", transfer: "ПМ", inventory: "ІН", production: "АВ", invoice: "РХ", request: "ЗП" }[kind] || ""; const nums = (kind === "invoice" ? S.invoices : kind === "request" ? S.whrequests : S.whdocs.filter(d => d.kind === kind)).map(d => parseInt(String(d.number||"").replace(/\D/g, "")) || 0); return pre + "-" + String(Math.max(0, ...nums) + 1).padStart(5, "0"); }
+function productOptions(sel){ return opt("", "— номенклатура —", sel) + ["ЗЗР","Насіння","Добрива","Паливо","Запчастини","Витратний матеріал","Інше"].map(t => { const ps = sorted("products").filter(p => (p.type || "Інше") === t && !p.archived); return ps.length ? `<optgroup label="${esc(t)}">${ps.map(p => opt(p.id, p.name + (p.unit ? ", " + p.unit : ""), sel)).join("")}</optgroup>` : ""; }).join(""); }
+function lineRow(l, mode){
+  l = l || {};
+  return `<div class="approw wl" style="grid-template-columns:2.2fr ${mode==="inv"?"90px 1fr 1fr":"1fr 1fr 1fr"} 32px">
+    <select class="lP" aria-label="Номенклатура">${productOptions(l.productId)}</select>
+    ${mode === "inv" ? `<span class="note lBook">облік: —</span><input class="lF" inputmode="decimal" placeholder="фактично" value="${esc(l.fact??"")}" aria-label="Фактична кількість"><input class="lPr" inputmode="decimal" placeholder="ціна" value="${esc(l.price??"")}" aria-label="Ціна">`
+      : `<input class="lQ" inputmode="decimal" placeholder="кількість" value="${esc(l.qty??"")}" aria-label="Кількість"><input class="lPr" inputmode="decimal" placeholder="ціна, грн" value="${esc(l.price??"")}" aria-label="Ціна"><span class="note lS" style="align-self:center">${l.qty&&l.price?fmt(lineSum(l)):""}</span>`}
+    <button class="btn sm lX" type="button" aria-label="Прибрати рядок">×</button></div>`;
+}
+function readLines(box, mode){ return [...box.querySelectorAll(".wl")].map(r => mode === "inv" ? { productId: r.querySelector(".lP").value, fact: num(r.querySelector(".lF").value), price: num(r.querySelector(".lPr").value) } : { productId: r.querySelector(".lP").value, qty: num(r.querySelector(".lQ").value), price: num(r.querySelector(".lPr").value) }).filter(l => l.productId); }
+function bindLines(m, sel, mode, getWh){
+  const box = m.querySelector(sel);
+  const refresh = () => { box.querySelectorAll(".wl").forEach(r => { const pid = r.querySelector(".lP").value;
+    if(mode === "inv"){ const w = getWh && getWh(); r.querySelector(".lBook").textContent = pid && w ? "облік: " + fmt(stockOf(w, pid, val(m, "wDate") || today()), 3) + " " + prodUnit(pid) : "облік: —"; }
+    else { const s = r.querySelector(".lS"); if(s){ const q = num(r.querySelector(".lQ").value), p = num(r.querySelector(".lPr").value); s.textContent = q && p ? fmt(q * p) : (pid ? prodUnit(pid) : ""); } } }); };
+  box.addEventListener("click", e => { if(e.target.classList.contains("lX")){ e.target.closest(".wl").remove(); refresh(); } });
+  box.addEventListener("change", e => { if(e.target.classList.contains("lP")){ const r = e.target.closest(".wl"); const pr = r.querySelector(".lPr"); if(pr && !pr.value){ const p = byId("products", e.target.value); const pl = latestPrice(e.target.value); if(pl) pr.value = pl; else if(p && p.price) pr.value = p.price; } } refresh(); });
+  box.addEventListener("input", refresh);
+  return refresh;
+}
+function latestPrice(pid){ const pls = [...S.pricelists].filter(x => !x.archived).sort((a,b) => (b.date||"").localeCompare(a.date||"")); for(const pl of pls){ const l = (pl.lines || []).find(x => x.productId === pid); if(l && num(l.price)) return num(l.price); } return 0; }
+function whDocDialog(d, preset){
+  const isNew = !d; const kind = (d && d.kind) || (preset && preset.kind) || "receipt"; const K = DOC_KINDS[kind];
+  const mainWh = (sorted("warehouses")[0] || {}).id || "";
+  d = d || Object.assign({ kind, date: today(), status: "draft", number: nextNumber(kind), lines: [], inputs: [], from: K.from ? mainWh : "", to: K.to ? mainWh : "" }, preset || {});
+  const locked = d.status === "posted";
+  const mode = K.inv ? "inv" : "";
+  const m = openModal({ title: (isNew ? "Новий: " : "") + K.one + (d.number ? " " + d.number : ""), wide: true,
+    body: `${locked ? `<div class="banner">Документ проведено. Щоб змінити — спершу скасуйте проведення.</div>` : ""}<div class="f">
+      <label>Номер<input id="wNum" value="${esc(d.number||"")}"></label>
+      <label>Дата<input id="wDate" type="date" value="${esc(d.date||"")}"></label>
+      ${K.cp ? `<label>Контрагент (постачальник)<select id="wCp">${cpOptions(d.counterpartyId)}</select></label><label>Вхідний рахунок<select id="wInv">${opt("", "—", d.invoiceId)}${S.invoices.map(i => opt(i.id, (i.number||"") + " · " + (cpName(i.counterpartyId)||""), d.invoiceId)).join("")}</select></label>` : ""}
+      ${K.from ? `<label>${K.prod ? "Сировина зі складу" : "Зі складу"}<select id="wFrom">${opt("", "—", d.from)}${sorted("warehouses").map(w => opt(w.id, w.name, d.from)).join("")}</select></label>` : ""}
+      ${K.to ? `<label>${K.inv ? "Склад" : K.prod ? "Продукцію на склад" : "На склад"}<select id="wTo">${opt("", "—", d.to)}${sorted("warehouses").map(w => opt(w.id, w.name, d.to)).join("")}</select></label>` : ""}
+      ${K.target ? `<label>Агрооперація<select id="wOp">${opt("", "—", d.opId)}${S.ops.filter(o => Number(o.season) === state.season || o.id === d.opId).sort((a,b)=>Number(b.number||0)-Number(a.number||0)).map(o => opt(o.id, "№" + o.number + " " + opTitle(o) + " · " + ((byId("fields", o.fieldId)||{}).name||""), d.opId)).join("")}</select></label>
+        <label>Поле<select id="wField">${opt("", "—", d.fieldId)}${[...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true})).map(f => opt(f.id, f.name, d.fieldId)).join("")}</select></label>
+        <label>Машина<select id="wMach">${optsFrom(sorted("machines"), d.machineId, "—")}</select></label>
+        <label>Призначення / отримувач<input id="wPurp" value="${esc(d.purpose||"")}" placeholder="напр. ремонт, господарські потреби"></label>` : ""}
+      <label>Відповідальний<input id="wResp" value="${esc(d.responsible||"")}"></label>
+      <label class="full">Додаткова інформація<textarea id="wNote">${esc(d.note||"")}</textarea></label>
+    </div>
+    ${K.prod ? `<div><b>Сировина (списується)</b><div class="apps" id="wIn" style="margin-top:6px">${(d.inputs||[]).map(l => lineRow(l)).join("")}</div><button class="btn sm" type="button" id="wAddIn" style="margin-top:6px">+ Рядок</button></div>` : ""}
+    <div><b>${K.prod ? "Продукція (оприбутковується)" : K.inv ? "Фактичні залишки" : "Номенклатура"}</b><div class="apps" id="wLines" style="margin-top:6px">${(d.lines||[]).map(l => lineRow(l, mode)).join("")}</div><button class="btn sm" type="button" id="wAdd" style="margin-top:6px">+ Рядок</button>${K.inv ? ` <button class="btn sm" type="button" id="wFillInv">Заповнити всіма залишками складу</button>` : ""}</div>
+    <div class="note" id="wTot"></div>`,
+    extra: (locked ? `<button class="btn" type="button" id="wUnpost">Скасувати проведення</button>` : `<button class="btn" type="button" id="wPost">Зберегти і провести</button>`),
+    onDelete: isNew ? null : async () => remove("whdocs", d.id),
+    onSave: async (m) => saveWhDoc(m, d, K, mode, d.status)
+  });
+  const refresh = bindLines(m, "#wLines", mode, () => val(m, K.inv ? "wTo" : "wFrom"));
+  if(K.prod) bindLines(m, "#wIn", "", () => val(m, "wFrom"));
+  const tot = () => { const ls = readLines(m.querySelector("#wLines"), mode); m.querySelector("#wTot").textContent = mode === "inv" ? `Рядків: ${ls.length}` : `Рядків: ${ls.length} · сума ${fmt(sum(ls, lineSum))} грн`; };
+  m.addEventListener("input", tot); m.addEventListener("change", tot); tot(); refresh();
+  m.querySelector("#wAdd").onclick = () => { m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow({}, mode)); };
+  if(K.prod) m.querySelector("#wAddIn").onclick = () => { m.querySelector("#wIn").insertAdjacentHTML("beforeend", lineRow({})); };
+  if(K.inv) m.querySelector("#wFillInv").onclick = () => { const w = val(m, "wTo"); if(!w){ toast("Оберіть склад"); return; } const { st, avg } = stockReplay(val(m, "wDate") || today()); const have = new Set(readLines(m.querySelector("#wLines"), mode).map(l => l.productId));
+    Object.values(st).filter(x => x.w === w && Math.abs(x.qty) > 1e-9 && !have.has(x.p)).forEach(x => m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow({ productId: x.p, fact: +x.qty.toFixed(3), price: +avg(x).toFixed(2) }, mode))); refresh(); };
+  if(K.cp){ m.querySelector("#wInv").addEventListener("change", e => { const inv = byId("invoices", e.target.value); if(!inv) return; if(!val(m, "wCp")) m.querySelector("#wCp").value = inv.counterpartyId || "";
+    if(!readLines(m.querySelector("#wLines"), mode).length){ (inv.lines || []).forEach(l => m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow(l))); tot(); } }); }
+  const post = m.querySelector("#wPost"); if(post) post.onclick = async () => { if(await saveWhDoc(m, d, K, mode, "posted")) closeModal(); };
+  const unpost = m.querySelector("#wUnpost"); if(unpost) unpost.onclick = async () => { await save("whdocs", Object.assign({}, d, { status: "draft" })); closeModal(); toast("Проведення скасовано"); };
+  if(locked) m.querySelectorAll("#mForm input, #mForm select, #mForm textarea, #mForm button").forEach(x => x.disabled = true);
+}
+async function saveWhDoc(m, d, K, mode, status){
+  if(d.status === "posted" && status === "posted" && m.querySelector("#wNum").disabled) return true;
+  const o = Object.assign({}, d, { number: val(m,"wNum"), date: val(m,"wDate"), responsible: val(m,"wResp"), note: val(m,"wNote"), lines: readLines(m.querySelector("#wLines"), mode), status });
+  if(K.cp){ o.counterpartyId = val(m,"wCp"); o.invoiceId = val(m,"wInv"); }
+  if(K.from) o.from = val(m,"wFrom"); if(K.to) o.to = val(m,"wTo");
+  if(K.target){ o.opId = val(m,"wOp"); o.fieldId = val(m,"wField"); o.machineId = val(m,"wMach"); o.purpose = val(m,"wPurp"); if(o.opId && !o.fieldId){ const op = byId("ops", o.opId); if(op) o.fieldId = op.fieldId; } }
+  if(K.prod) o.inputs = readLines(m.querySelector("#wIn"), "");
+  if(!o.lines.length){ toast("Додайте хоча б один рядок"); return false; }
+  if((K.from && !o.from) || (K.to && !o.to)){ toast("Оберіть склад"); return false; }
+  if(o.kind === "transfer" && o.from === o.to){ toast("Склади мають відрізнятися"); return false; }
+  if(status === "posted" && (o.kind === "issue" || o.kind === "transfer" || o.kind === "production")){
+    const src = o.from; const need = o.kind === "production" ? o.inputs : o.lines; const short = [];
+    const { st } = stockReplay(o.date);
+    need.forEach(l => { const have = (st[src + "|" + l.productId] || {}).qty || 0; if(num(l.qty) > have + 1e-9) short.push(`${prodName(l.productId)}: є ${fmt(have,3)}, потрібно ${fmt(num(l.qty),3)}`); });
+    if(short.length) toast("Увага, не вистачає залишку: " + short.join("; "));
+  }
+  return !!(await save("whdocs", o));
+}
+
+/* requests (transfer & approval) */
+function wmsRequests(){
+  const list = [...S.whrequests].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+  return `<div class="filters"><span class="note">Запит на переміщення або закупівлю спершу погоджують, потім за ним створюють документ.</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newReq">+ Запит</button></div>
+  <div class="tw"><table><thead><tr><th>Статус</th><th>Номер</th><th>Дата</th><th>Тип</th><th>Зі складу</th><th>На склад</th><th>Номенклатура</th><th>Ініціатор</th><th>Погоджувач</th></tr></thead><tbody>
+  ${list.length ? list.map(r => `<tr class="click" data-req="${esc(r.id)}"><td>${reqPill(r.status)}</td><td><b>${esc(r.number||"")}</b></td><td>${fdate(r.date)}</td><td>${esc(r.type||"")}</td><td>${esc(whName(r.from)||"—")}</td><td>${esc(whName(r.to)||"—")}</td><td>${(r.lines||[]).slice(0,3).map(l => esc(prodName(l.productId)) + " " + fmt(num(l.qty),3)).join("<br>")}</td><td>${esc(r.requestedBy||"")}</td><td>${esc(r.approvedBy||"")}</td></tr>`).join("")
+    : `<tr><td colspan="9"><div class="empty">Запитів немає.</div></td></tr>`}</tbody></table></div>`;
+}
+function reqDialog(r){
+  const isNew = !r; r = r || { date: today(), status: "new", type: "Переміщення", number: nextNumber("request"), lines: [] };
+  const m = openModal({ title: isNew ? "Новий запит" : "Запит " + (r.number || ""), wide: true,
+    body: `<div class="f"><label>Номер<input id="rNum" value="${esc(r.number||"")}"></label><label>Дата<input id="rDate" type="date" value="${esc(r.date||"")}"></label>
+      <label>Тип<select id="rType">${optsFrom(["Переміщення","Закупівля","Видача"], r.type)}</select></label><label>Статус<select id="rStat">${Object.entries(REQ_STATUS).map(([k,v]) => opt(k, v[0], r.status)).join("")}</select></label>
+      <label>Зі складу<select id="rFrom">${opt("", "—", r.from)}${sorted("warehouses").map(w => opt(w.id, w.name, r.from)).join("")}</select></label><label>На склад<select id="rTo">${opt("", "—", r.to)}${sorted("warehouses").map(w => opt(w.id, w.name, r.to)).join("")}</select></label>
+      <label>Ініціатор<input id="rBy" value="${esc(r.requestedBy||"")}"></label><label>Погоджувач<input id="rAp" value="${esc(r.approvedBy||"")}"></label>
+      <label class="full">Коментар<textarea id="rNote">${esc(r.note||"")}</textarea></label></div>
+    <div><b>Номенклатура</b><div class="apps" id="wLines" style="margin-top:6px">${(r.lines||[]).map(l => lineRow(l)).join("")}</div><button class="btn sm" type="button" id="wAdd" style="margin-top:6px">+ Рядок</button></div>`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="rMake">Створити документ за запитом</button>`,
+    onDelete: isNew ? null : async () => remove("whrequests", r.id),
+    onSave: async (m) => !!(await save("whrequests", Object.assign({}, r, { number: val(m,"rNum"), date: val(m,"rDate"), type: val(m,"rType"), status: val(m,"rStat"), from: val(m,"rFrom"), to: val(m,"rTo"), requestedBy: val(m,"rBy"), approvedBy: val(m,"rAp"), note: val(m,"rNote"), lines: readLines(m.querySelector("#wLines"), "") })))
+  });
+  bindLines(m, "#wLines", "");
+  m.querySelector("#wAdd").onclick = () => m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow({}));
+  const mk = m.querySelector("#rMake"); if(mk) mk.onclick = async () => {
+    if(r.status !== "approved" && r.status !== "done"){ toast("Спершу погодьте запит"); return; }
+    const kind = r.type === "Закупівля" ? "receipt" : r.type === "Видача" ? "issue" : "transfer";
+    await save("whrequests", Object.assign({}, r, { status: "done" })); closeModal();
+    whDocDialog(null, { kind, from: r.from || "", to: r.to || "", lines: (r.lines || []).map(l => ({ ...l })), note: "За запитом " + (r.number || "") });
+  };
+}
+
+/* incoming invoices */
+function wmsInvoices(){
+  const list = S.invoices.filter(i => inPeriod(i.date)).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+  return periodBar() + `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newInvoice">+ Вхідний рахунок</button></div>
+  <div class="tw"><table><thead><tr><th>Номер</th><th>Дата</th><th>Постачальник</th><th class="n">Сума, грн</th><th>Оплатити до</th><th>Оплата</th><th>Надходження</th></tr></thead><tbody>
+  ${list.length ? list.map(i => { const rec = S.whdocs.filter(d => d.invoiceId === i.id); return `<tr class="click" data-invoice="${esc(i.id)}"><td><b>${esc(i.number||"")}</b></td><td>${fdate(i.date)}</td><td>${esc(cpName(i.counterpartyId)||"—")}</td><td class="n">${fmt(sum(i.lines||[], lineSum))}</td><td>${fdate(i.dueDate)}</td><td><span class="pill ${i.paid?"st-done":(i.dueDate && i.dueDate < today() ? "st-cancel" : "st-planned")}" style="${!i.paid && i.dueDate && i.dueDate < today() ? "color:var(--bad)" : ""}">${i.paid ? "Оплачено" : "Не оплачено"}</span></td><td>${rec.length ? rec.map(d => esc(d.number)).join(", ") : "—"}</td></tr>`; }).join("")
+    : `<tr><td colspan="7"><div class="empty">Рахунків за період немає.</div></td></tr>`}</tbody></table></div>`;
+}
+function invoiceDialog(i){
+  const isNew = !i; i = i || { date: today(), number: "", lines: [] };
+  const m = openModal({ title: isNew ? "Новий вхідний рахунок" : "Рахунок " + (i.number || ""), wide: true,
+    body: `<div class="f"><label>Номер рахунку<input id="iNum" value="${esc(i.number||"")}"></label><label>Дата<input id="iDate" type="date" value="${esc(i.date||"")}"></label>
+      <label>Постачальник<select id="iCp">${cpOptions(i.counterpartyId)}</select></label><label>Оплатити до<input id="iDue" type="date" value="${esc(i.dueDate||"")}"></label>
+      <label><span><input type="checkbox" id="iPaid" ${i.paid?"checked":""}> Оплачено</span></label><label>Дата оплати<input id="iPD" type="date" value="${esc(i.paidDate||"")}"></label>
+      <label class="full">Коментар<textarea id="iNote">${esc(i.note||"")}</textarea></label></div>
+    <div><b>Позиції рахунку</b><div class="apps" id="wLines" style="margin-top:6px">${(i.lines||[]).map(l => lineRow(l)).join("")}</div><button class="btn sm" type="button" id="wAdd" style="margin-top:6px">+ Рядок</button></div><div class="note" id="iTot"></div>`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="iRec">Створити надходження</button>`,
+    onDelete: isNew ? null : async () => remove("invoices", i.id),
+    onSave: async (m) => !!(await save("invoices", Object.assign({}, i, { number: val(m,"iNum"), date: val(m,"iDate"), counterpartyId: val(m,"iCp"), dueDate: val(m,"iDue"), paid: m.querySelector("#iPaid").checked, paidDate: val(m,"iPD"), note: val(m,"iNote"), lines: readLines(m.querySelector("#wLines"), "") })))
+  });
+  bindLines(m, "#wLines", "");
+  const tot = () => m.querySelector("#iTot").textContent = "Сума: " + fmt(sum(readLines(m.querySelector("#wLines"), ""), lineSum)) + " грн"; m.addEventListener("input", tot); m.addEventListener("change", tot); tot();
+  m.querySelector("#wAdd").onclick = () => m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow({}));
+  const rc = m.querySelector("#iRec"); if(rc) rc.onclick = () => { closeModal(); whDocDialog(null, { kind: "receipt", counterpartyId: i.counterpartyId, invoiceId: i.id, lines: (i.lines || []).map(l => ({ ...l })), note: "За рахунком " + (i.number || "") }); };
+}
+
+/* items, prices, warehouses, units */
+function wmsItems(){
+  const q = (state.wmsQ || "").toLowerCase(); const cat = state.itemCat || "";
+  const cats = ["ЗЗР","Насіння","Добрива","Паливо","Запчастини","Витратний матеріал","Інше"];
+  const { st } = stockReplay("");
+  const totalQty = pid => sum(Object.values(st).filter(x => x.p === pid), x => x.qty);
+  const list = sorted("products").filter(p => (!cat || (p.type || "Інше") === cat) && (!q || [p.name, p.ai, p.externalId].join(" ").toLowerCase().includes(q)) && (state.itemArch ? p.archived : !p.archived));
+  return `<div class="filters"><input id="wq" placeholder="Пошук номенклатури" value="${esc(state.wmsQ||"")}" style="flex:1;min-width:200px"><select id="itemCat">${opt("", "Усі категорії", cat)}${cats.map(c => opt(c, c, cat)).join("")}</select>
+    <label class="muted"><input type="checkbox" id="itemArch" ${state.itemArch?"checked":""}> В архіві</label><button class="btn sm" type="button" data-act="csvItems">Експорт</button><button class="btn pri" type="button" data-act="newProduct">+ Номенклатура</button></div>
+  <div class="tw"><table><thead><tr><th>Назва</th><th>Категорія</th><th>Базова одиниця виміру</th><th>Діюча речовина / склад</th><th class="n">Залишок</th><th class="n">Ціна, грн</th><th>Зовнішній ідентифікатор</th><th>Додаткова інформація</th></tr></thead><tbody>
+  ${list.length ? list.map(p => `<tr class="click" data-product="${esc(p.id)}"><td><b>${esc(p.name)}</b></td><td>${esc(p.type||"Інше")}</td><td>${esc(p.unit||"")}</td><td>${esc(p.ai||"")}</td><td class="n">${fmt(totalQty(p.id),3)}</td><td class="n">${latestPrice(p.id)||p.price?fmt(latestPrice(p.id)||num(p.price)):"—"}</td><td>${esc(p.externalId||"")}</td><td>${esc(p.note||"")}</td></tr>`).join("")
+    : `<tr><td colspan="8"><div class="empty">Номенклатури немає.</div></td></tr>`}</tbody></table></div>`;
+}
+function wmsPrices(){
+  const list = [...S.pricelists].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+  return `<div class="filters"><span class="note">Ціни з найсвіжішого прайс-листа підставляються в нові документи і рахунки.</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newPricelist">+ Прайс-лист</button></div>
+  <div class="tw"><table><thead><tr><th>Назва</th><th>Дата</th><th>Постачальник</th><th class="n">Позицій</th><th>Статус</th></tr></thead><tbody>
+  ${list.length ? list.map(p => `<tr class="click" data-pricelist="${esc(p.id)}"><td><b>${esc(p.name||"")}</b></td><td>${fdate(p.date)}</td><td>${esc(cpName(p.counterpartyId)||"—")}</td><td class="n">${(p.lines||[]).length}</td><td>${p.archived?`<span class="pill st-cancel">В архіві</span>`:`<span class="pill st-done">Діючий</span>`}</td></tr>`).join("")
+    : `<tr><td colspan="5"><div class="empty">Прайс-листів немає.</div></td></tr>`}</tbody></table></div>`;
+}
+function pricelistDialog(p){
+  const isNew = !p; p = p || { date: today(), lines: [] };
+  const m = openModal({ title: isNew ? "Новий прайс-лист" : p.name, wide: true,
+    body: `<div class="f"><label>Назва<input id="plName" value="${esc(p.name||"")}"></label><label>Дата<input id="plDate" type="date" value="${esc(p.date||"")}"></label><label>Постачальник<select id="plCp">${cpOptions(p.counterpartyId)}</select></label><label><span><input type="checkbox" id="plArch" ${p.archived?"checked":""}> В архіві</span></label></div>
+    <div><b>Ціни</b><div class="apps" id="wLines" style="margin-top:6px">${(p.lines||[]).map(l => lineRow(l)).join("")}</div><button class="btn sm" type="button" id="wAdd" style="margin-top:6px">+ Рядок</button><p class="note">Кількість у прайс-листі не обов’язкова.</p></div>`,
+    onDelete: isNew ? null : async () => remove("pricelists", p.id),
+    onSave: async (m) => { const name = val(m,"plName"); if(!name){ m.querySelector("#plName").focus(); return false; } return !!(await save("pricelists", Object.assign({}, p, { name, date: val(m,"plDate"), counterpartyId: val(m,"plCp"), archived: m.querySelector("#plArch").checked, lines: readLines(m.querySelector("#wLines"), "") }))); }
+  });
+  bindLines(m, "#wLines", ""); m.querySelector("#wAdd").onclick = () => m.querySelector("#wLines").insertAdjacentHTML("beforeend", lineRow({}));
+}
+function wmsWarehouses(){
+  const { st } = stockReplay("");
+  const list = sorted("warehouses");
+  return `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newWarehouse">+ Склад</button></div>
+  <div class="tw"><table><thead><tr><th>Склад</th><th>Тип</th><th>Група полів</th><th>Відповідальний</th><th>Адреса</th><th class="n">Позицій</th><th class="n">Вартість залишків, грн</th></tr></thead><tbody>
+  ${list.length ? list.map(w => { const xs = Object.values(st).filter(x => x.w === w.id && Math.abs(x.qty) > 1e-9); return `<tr class="click" data-warehouse="${esc(w.id)}"><td><b>${esc(w.name)}</b>${w.archived?` <span class="pill st-cancel">архів</span>`:""}</td><td>${esc(w.type||"")}</td><td>${esc(w.group||"")}</td><td>${esc(w.responsible||"")}</td><td>${esc(w.address||"")}</td><td class="n">${xs.length}</td><td class="n">${fmt(sum(xs, x => x.value))}</td></tr>`; }).join("")
+    : `<tr><td colspan="7"><div class="empty"><b>Складів ще немає</b>Створіть хоча б один склад — з нього починається облік ТМЦ.</div></td></tr>`}</tbody></table></div>`;
+}
+const warehouseFields = [["name","Назва"],["type","Тип","select",WH_TYPES],["group","Група полів"],["responsible","Відповідальний"],["address","Адреса"],["note","Додаткова інформація","area"]];
+function wmsUnits(){
+  const custom = sorted("units");
+  return `<div class="filters"><span class="note">Базові одиниці: ${UNITS.map(esc).join(", ")}. Тут можна додати свої (мішок, каністра, бочка) з коефіцієнтом до базової.</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newUnit">+ Одиниця</button></div>
+  <div class="tw"><table><thead><tr><th>Назва</th><th>Скорочення</th><th>Базова одиниця</th><th class="n">Коефіцієнт</th></tr></thead><tbody>
+  ${custom.length ? custom.map(u => `<tr class="click" data-unit="${esc(u.id)}"><td>${esc(u.name)}</td><td>${esc(u.short||"")}</td><td>${esc(u.base||"")}</td><td class="n">${u.factor?fmt(num(u.factor),3):"—"}</td></tr>`).join("") : `<tr><td colspan="4"><div class="empty">Своїх одиниць ще немає.</div></td></tr>`}</tbody></table></div>`;
+}
+const unitFields = [["name","Назва"],["short","Скорочення"],["base","Базова одиниця","select",UNITS],["factor","Скільки базових одиниць в одній","num"]];
+
+/* reports */
+function wmsReports(){
+  const T = state.wmsRep || "turnover";
+  const tabs = [["turnover","Оборотна відомість"],["fields","Витрати ТМЦ по полях і культурах"],["ops","Списання по агроопераціях"],["suppliers","Закупівлі за постачальниками"]];
+  const { moves } = stockReplay("");
+  let head = [], rows = [], nums = [];
+  if(T === "turnover"){
+    const g = {};
+    moves.forEach(mv => { if(state.whSel && mv.w !== state.whSel) return; const k = mv.w + "|" + mv.p; const x = g[k] ||= { w: mv.w, p: mv.p, sq: 0, sv: 0, iq: 0, iv: 0, oq: 0, ov: 0 }; const dt = mv.d.date || "";
+      if(dt < state.period.from){ x.sq += mv.qty; x.sv += mv.value; } else if(dt <= state.period.to){ if(mv.qty >= 0){ x.iq += mv.qty; x.iv += mv.value; } else { x.oq -= mv.qty; x.ov -= mv.value; } } });
+    head = ["Склад","Номенклатура","Од.","Початок, к-сть","Початок, грн","Прихід, к-сть","Прихід, грн","Розхід, к-сть","Розхід, грн","Кінець, к-сть","Кінець, грн"]; nums = [3,4,5,6,7,8,9,10];
+    rows = Object.values(g).filter(x => x.sq || x.iq || x.oq).map(x => [whName(x.w), prodName(x.p), prodUnit(x.p), x.sq, x.sv, x.iq, x.iv, x.oq, x.ov, x.sq + x.iq - x.oq, x.sv + x.iv - x.ov]).sort((a,b) => (a[0]||"").localeCompare(b[0]||"","uk") || (a[1]||"").localeCompare(b[1]||"","uk"));
+  } else if(T === "fields" || T === "ops"){
+    const g = {};
+    moves.filter(mv => mv.d.kind === "issue" && inPeriod(mv.d.date)).forEach(mv => { const f = byId("fields", mv.d.fieldId); const op = byId("ops", mv.d.opId);
+      const k = T === "fields" ? (mv.d.fieldId || "-") + "|" + mv.p : (mv.d.opId || "-") + "|" + mv.p;
+      const x = g[k] ||= { f, op, p: mv.p, q: 0, v: 0 }; x.q -= mv.qty; x.v -= mv.value; });
+    if(T === "fields"){ head = ["Поле","Культура","Площа, га","Номенклатура","Од.","Кількість","На 1 га","Вартість, грн","Грн/га"]; nums = [2,5,6,7,8];
+      rows = Object.values(g).map(x => { const a = x.f ? num(x.f.area) : 0; return [x.f ? x.f.name : "(без поля)", x.f ? fieldCrop(x.f) : "", a, prodName(x.p), prodUnit(x.p), x.q, a ? x.q / a : 0, x.v, a ? x.v / a : 0]; }).sort((a,b) => String(a[0]).localeCompare(String(b[0]),"uk",{numeric:true})); }
+    else { head = ["Агрооперація","Поле","Оброблено, га","Номенклатура","Од.","Списано","Фактична норма/га","Вартість, грн"]; nums = [2,5,6,7];
+      rows = Object.values(g).map(x => { const a = x.op ? opDone(x.op) : 0; return [x.op ? "№" + x.op.number + " " + opTitle(x.op) : "(без операції)", x.op ? nameOf("fields", x.op.fieldId) : "", a, prodName(x.p), prodUnit(x.p), x.q, a ? x.q / a : 0, x.v]; }); }
+  } else {
+    const g = {};
+    S.whdocs.filter(d => d.kind === "receipt" && d.status === "posted" && inPeriod(d.date)).forEach(d => (d.lines || []).forEach(l => { const k = (d.counterpartyId || "-") + "|" + l.productId; const x = g[k] ||= { c: d.counterpartyId, p: l.productId, q: 0, v: 0 }; x.q += num(l.qty); x.v += lineSum(l); }));
+    head = ["Постачальник","Номенклатура","Од.","Кількість","Сума, грн","Середня ціна, грн"]; nums = [3,4,5];
+    rows = Object.values(g).map(x => [cpName(x.c) || "(не вказано)", prodName(x.p), prodUnit(x.p), x.q, x.v, x.q ? x.v / x.q : 0]).sort((a,b) => String(a[0]).localeCompare(String(b[0]),"uk"));
+  }
+  state._wmsReport = { name: (tabs.find(t => t[0] === T) || [])[1], head, rows };
+  return `<div class="tabs" style="border:0">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-wmsrep="${k}">${esc(l)}</button>`).join("")}</div>${periodBar()}
+  <div class="filters">${T === "turnover" ? whFilter(true) : ""}<span style="flex:1"></span><button class="btn sm" type="button" data-act="csvWmsReport">Експорт</button></div>
+  ${rows.length ? `<div class="tw"><table><thead><tr>${head.map((h,i) => `<th class="${nums.includes(i)?"n":""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map((v,i) => `<td class="${nums.includes(i)?"n":""}">${nums.includes(i) ? (v ? fmt(v, /к-сть|Кількість|Списано|На 1|норма/.test(head[i]) ? 3 : 2) : "—") : esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="card"><div class="empty">Немає даних за період.</div></div>`}`;
+}
+
+function issueFromOp(op){
+  const f = byId("fields", op.fieldId); const area = opDone(op) || opPlanned(op);
+  const lines = (op.applications || []).map(a => { const p = byId("products", a.productId) || {}; let qty = num(a.rate) * area; if(p.unit === "т" && a.unit === "кг") qty /= 1000; if(p.unit === "кг" && a.unit === "т") qty *= 1000; return { productId: a.productId, qty: +qty.toFixed(3) }; }).filter(l => l.qty > 0);
+  const wh = (S.warehouses.find(w => w.group && f && w.group === f.group) || sorted("warehouses")[0] || {}).id || "";
+  whDocDialog(null, { kind: "issue", opId: op.id, fieldId: op.fieldId, from: wh, lines, date: op.factTo || op.factFrom || today(), note: "Списання на агрооперацію №" + op.number });
+}
+
+function wmsAction(a, d){
+  if(a === "whNew"){ whDocDialog(null, { kind: d.kind }); return true; }
+  if(a === "newReq"){ reqDialog(null); return true; }
+  if(a === "newInvoice"){ invoiceDialog(null); return true; }
+  if(a === "newPricelist"){ pricelistDialog(null); return true; }
+  if(a === "newWarehouse"){ simpleDialog("warehouses", null, "склад", warehouseFields); return true; }
+  if(a === "newUnit"){ simpleDialog("units", null, "одиниця виміру", unitFields); return true; }
+  if(a === "csvStock"){ const { st, avg } = stockReplay(state.stockDate || ""); exportCsv("Залишки ТМЦ", ["Склад","Номенклатура","Категорія","Кількість","Од.","Середня ціна","Вартість"], Object.values(st).filter(x => Math.abs(x.qty) > 1e-9 && (!state.whSel || x.w === state.whSel)).map(x => { const p = byId("products", x.p) || {}; return [whName(x.w), p.name, p.type, +x.qty.toFixed(3), p.unit, +avg(x).toFixed(2), +x.value.toFixed(2)]; })); return true; }
+  if(a === "csvWhDocs"){ exportCsv(DOC_KINDS[d.kind].title, ["Номер","Дата","Статус","Контрагент","Зі складу","На склад","Призначення","Номенклатура","Кількість","Од.","Ціна","Сума","Додаткова інформація"], S.whdocs.filter(x => x.kind === d.kind && inPeriod(x.date)).flatMap(x => (x.lines || []).map(l => [x.number, x.date, WH_STATUS[x.status||"draft"][0], cpName(x.counterpartyId), whName(x.from), whName(x.to), x.kind === "issue" ? issueTarget(x) : "", prodName(l.productId), d.kind === "inventory" ? l.fact : l.qty, prodUnit(l.productId), l.price, +lineSum(l).toFixed(2), x.note]))); return true; }
+  if(a === "csvItems"){ exportCsv("Номенклатура", ["Назва","Категорія","Базова одиниця виміру","Діюча речовина / склад","Ціна","Зовнішній ідентифікатор","В архіві","Додаткова інформація"], sorted("products").map(p => [p.name, p.type, p.unit, p.ai, p.price, p.externalId, p.archived ? "Так" : "Ні", p.note])); return true; }
+  if(a === "csvWmsReport" && state._wmsReport){ const r = state._wmsReport; exportCsv(r.name, r.head, r.rows.map(row => row.map(v => typeof v === "number" ? +v.toFixed(3) : v))); return true; }
+  return false;
+}
+
 /* ---------- demo data ---------- */
 async function makeDemo(){
   const D = { demo: true };
@@ -1719,6 +2049,10 @@ async function makeDemo(){
   await save("service", { machineId:M.m1, kind:"ТО-2", status:"planned", date: today(), demo:true });
   await save("service", { machineId:M.m2, kind:"Заміна мастила в двигуні", status:"done", date: today(), cost: 4200, demo:true });
   await makeLandDemo(F);
+  { const W1 = await save("warehouses", { name: "Головний склад (приклад)", type: "Головний склад", demo: true }); const W2 = await save("warehouses", { name: "Склад ЗЗР (приклад)", type: "Склад ЗЗР", demo: true });
+    const sup = S.owners.find(o => o.isOwn) ? await save("owners", { name: "ТОВ «Постачальник» (приклад)", kind: "Юридична особа", demo: true }) : "";
+    await save("whdocs", { kind: "receipt", number: "НХ-00001", date: today(), status: "posted", to: W1, counterpartyId: sup, lines: [{ productId: PR.a, qty: 400, price: 180 }, { productId: PR.c, qty: 20000, price: 18 }, { productId: PR.d, qty: 5000, price: 56 }], demo: true });
+    await save("whdocs", { kind: "transfer", number: "ПМ-00001", date: today(), status: "posted", from: W1, to: W2, lines: [{ productId: PR.a, qty: 150 }], demo: true }); }
   state.mapVB = {};
   toast("Приклад створено");
 }
@@ -1730,7 +2064,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
+const VIEWS = { wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -1749,7 +2083,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -1768,6 +2102,7 @@ main.addEventListener("click", e => {
     if(a==="newTask") return taskDialog(null, d.machine ? { machineId: d.machine } : {});
     if(a==="newService") return serviceDialog(null, d.machine ? { machineId: d.machine } : {});
     if(landAction(a, d)) return;
+    if(wmsAction(a, d)) return;
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -1783,6 +2118,15 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.wmstab){ state.wmsTab = d.wmstab; return render(); }
+  if(d.wmsrep){ state.wmsRep = d.wmsrep; return render(); }
+  if(d.whdoc) return whDocDialog(byId("whdocs", d.whdoc));
+  if(d.req) return reqDialog(byId("whrequests", d.req));
+  if(d.invoice) return invoiceDialog(byId("invoices", d.invoice));
+  if(d.pricelist) return pricelistDialog(byId("pricelists", d.pricelist));
+  if(d.warehouse) return simpleDialog("warehouses", byId("warehouses", d.warehouse), "склад", warehouseFields);
+  if(d.unit) return simpleDialog("units", byId("units", d.unit), "одиниця виміру", unitFields);
+  if(d.stockitem){ state.wmsTab = "reports"; state.wmsRep = "turnover"; state.wmsQ = ""; return render(); }
   if(d.fieldOpen){ state.fieldSel = d.fieldOpen; location.hash = "fields"; return; }
   if(d.landtab){ state.landTab = d.landtab; return render(); }
   if(d.parcel) return parcelDialog(byId("parcels", d.parcel));
@@ -1805,12 +2149,17 @@ main.addEventListener("input", e => {
   if(id==="oq"){ state.ops.q = e.target.value; render(); }
   if(id==="mq"){ state.machQ = e.target.value; render(); }
   if(id==="lq"){ state.landQ = e.target.value; render(); }
+  if(id==="wq"){ state.wmsQ = e.target.value; render(); }
 });
 main.addEventListener("change", e => {
   const id = e.target.id;
   if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
   if(id==="og"){ state.ops.group = e.target.value; render(); }
   if(id==="lc"){ state.landCouncil = e.target.value; render(); }
+  if(id==="whSel"){ state.whSel = e.target.value; render(); }
+  if(id==="stockDate"){ state.stockDate = e.target.value; render(); }
+  if(id==="itemCat"){ state.itemCat = e.target.value; render(); }
+  if(id==="itemArch"){ state.itemArch = e.target.checked; render(); }
   if(id==="ls"){ state.landStatus = e.target.value; render(); }
   if(id==="ry"){ state.rentYear = Number(e.target.value) || state.rentYear; render(); }
   if(id==="os"){ state.ops.status = e.target.value; render(); }
