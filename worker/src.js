@@ -1,6 +1,6 @@
 // КЛГ Агро Поле — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
-const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service"]);
+const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
@@ -52,6 +52,17 @@ async function handleApi(req, env, url) {
     const since = url.searchParams.get("since") || "1970-01-01T00:00:00.000Z";
     const { results } = await env.DB.prepare("SELECT col, id, data, updated, deleted FROM docs WHERE updated > ?").bind(since).all();
     return json({ now, docs: results.map(rowOut) });
+  }
+  if (path === "/api/wms" && req.method === "GET") {
+    const bbox = url.searchParams.get("bbox") || "";
+    if (!/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(bbox)) return json({ error: "bad bbox" }, 400);
+    const layer = url.searchParams.get("layer") === "ikk" ? "ikk" : "kadastr";
+    const src = "https://map.land.gov.ua/geowebcache/service/wms?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=" + layer + "&STYLES=&FORMAT=image/png&TRANSPARENT=TRUE&SRS=EPSG:900913&WIDTH=256&HEIGHT=256&BBOX=" + bbox;
+    try {
+      const r = await fetch(src, { cf: { cacheTtl: 86400, cacheEverything: true }, headers: { "user-agent": "Mozilla/5.0 KLG-Agro-Pole" } });
+      if (!r.ok) return new Response("", { status: 204 });
+      return new Response(r.body, { headers: { "content-type": r.headers.get("content-type") || "image/png", "cache-control": "private, max-age=86400" } });
+    } catch (e) { return new Response("", { status: 204 }); }
   }
   const m = path.match(/^\/api\/doc\/([a-z]+)\/([^/]+)$/);
   if (m) {

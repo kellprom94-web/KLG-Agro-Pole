@@ -175,6 +175,7 @@ tr:last-child td{border-bottom:0}
     <a href="#tasks" data-v="tasks">Завдання техніки</a>
     <a href="#service" data-v="service">Обслуговування</a>
     <div class="sec">Інше</div>
+    <a href="#land" data-v="land">Земельний банк</a>
     <a href="#refs" data-v="refs">Довідники</a>
     <a href="#reports" data-v="reports">Звіти</a>
     <div class="season">
@@ -208,7 +209,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -226,6 +227,7 @@ const state = {
   period: { from: new Date().getFullYear()+"-01-01", to: today() },
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
+  landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
   mapVB: {}
 };
 
@@ -379,16 +381,24 @@ function exportCsv(name, head, rows){
 const MT_KEY = "__MAPTILER_KEY__";
 const STYLES = { sat: "https://api.maptiler.com/maps/hybrid/style.json?key=" + MT_KEY, map: "https://api.maptiler.com/maps/streets-v2/style.json?key=" + MT_KEY };
 let mapStyle = lsGet("mapStyle") || "sat";
+let showKadastr = lsGet("kadastr") === "1";
+function toggleKadastr(){ showKadastr = !showKadastr; lsSet("kadastr", showKadastr ? "1" : "0"); Object.values(MAPS).forEach(M => { if(M.map.getLayer && M.map.getLayer("kadastr")) M.map.setLayoutProperty("kadastr", "visibility", showKadastr ? "visible" : "none"); M.el.querySelector("[data-kad]").classList.toggle("on", showKadastr); }); if(showKadastr) toast("Кадастровий шар видно з наближення 12 і більше"); }
 const MAPS = {}, pendingMaps = {};
 const EMPTY_FC = { type: "FeatureCollection", features: [] };
-function mapHtml(key, fields){
-  pendingMaps[key] = fields;
+function mapHtml(key, fields, parcels){
+  pendingMaps[key] = { fields, parcels: parcels || [] };
   return `<div class="mapslot" data-slot="${key}"></div>`;
 }
 function fieldsGeo(fields){
   return { type: "FeatureCollection", features: fields.filter(f => f.contours && f.contours.length).map(f => ({ type: "Feature",
     properties: { fid: f.id, name: f.name, color: cropColor(fieldCrop(f) || "Не вказана"), crop: fieldCrop(f) || "", variety: fieldSeason(f).variety || "", group: f.group || "", area: num(f.area) },
     geometry: { type: "MultiPolygon", coordinates: f.contours.map(r => [r]) } })) };
+}
+const PARCEL_COLORS = { "Взяті в оренду":"#34c759", "Взяті в суборенду":"#7ee08a", "Емфітевзис":"#64d2ff", "Власність":"#0a84ff", "Здані в оренду":"#bf5af2", "Здані в суборенду":"#d29bf5", "Сервітут":"#ac8e68", "Без типу":"#bdbdbd", "Закінчується":"#ff9f0a", "Закінчився":"#ff453a" };
+function parcelsGeo(parcels){
+  return { type: "FeatureCollection", features: parcels.filter(p => p.contours && p.contours.length).map(p => { const st = parcelStatus(p);
+    return { type: "Feature", properties: { pid: p.id, cad: p.cadastre || "", status: st, color: PARCEL_COLORS[parcelColorKey(p)] || "#bdbdbd", area: num(p.area), owner: nameOf("owners", p.ownerId) || "", council: p.council || "" },
+      geometry: { type: "MultiPolygon", coordinates: p.contours.map(r => [r]) } }; }) };
 }
 function bboxOf(fields){
   let b = null;
@@ -398,11 +408,17 @@ function bboxOf(fields){
 function addLayers(M){
   const map = M.map;
   if(map.getSource("fields")) return;
+  map.addSource("kadastr", { type: "raster", tiles: [location.origin + "/api/wms?bbox={bbox-epsg-3857}"], tileSize: 256, minzoom: 12, maxzoom: 19 });
+  map.addLayer({ id: "kadastr", type: "raster", source: "kadastr", minzoom: 12, layout: { visibility: showKadastr ? "visible" : "none" }, paint: { "raster-opacity": 0.85 } });
   map.addSource("fields", { type: "geojson", data: EMPTY_FC });
   map.addLayer({ id: "f-fill", type: "fill", source: "fields", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.42 } });
   map.addLayer({ id: "f-line", type: "line", source: "fields", paint: { "line-color": "#ffffff", "line-width": 1.4 } });
   map.addLayer({ id: "f-sel", type: "line", source: "fields", filter: ["==", ["get", "fid"], ""], paint: { "line-color": "#ff3b30", "line-width": 3 } });
   map.addLayer({ id: "f-lab", type: "symbol", source: "fields", minzoom: 11.5, layout: { "text-field": ["get", "name"], "text-size": 12, "text-font": ["Noto Sans Regular"], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "rgba(0,0,0,.85)", "text-halo-width": 1.4 } });
+  map.addSource("parcels", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({ id: "p-fill", type: "fill", source: "parcels", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.22 } });
+  map.addLayer({ id: "p-line", type: "line", source: "parcels", paint: { "line-color": ["get", "color"], "line-width": 1.6, "line-dasharray": [3, 1.5] } });
+  map.addLayer({ id: "p-sel", type: "line", source: "parcels", filter: ["==", ["get", "pid"], ""], paint: { "line-color": "#ff3b30", "line-width": 3 } });
   map.addSource("draw", { type: "geojson", data: EMPTY_FC });
   map.addLayer({ id: "d-fill", type: "fill", source: "draw", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#ffd60a", "fill-opacity": 0.25 } });
   map.addLayer({ id: "d-line", type: "line", source: "draw", filter: ["!=", ["geometry-type"], "Point"], paint: { "line-color": "#ffd60a", "line-width": 2.5, "line-dasharray": [2, 1] } });
@@ -414,14 +430,15 @@ function updateMapData(M){
   if(!src) return;
   src.setData(fieldsGeo(M.fields));
   map.setFilter("f-sel", ["==", ["get", "fid"], state.fieldSel || ""]);
+  const ps = map.getSource("parcels"); if(ps){ ps.setData(parcelsGeo(M.parcels || [])); map.setFilter("p-sel", ["==", ["get", "pid"], state.parcelSel || ""]); }
   updateDraw(M);
   const note = M.el.querySelector(".mapnote");
-  const has = M.fields.some(f => f.contours && f.contours.length);
+  const has = M.fields.some(f => f.contours && f.contours.length) || (M.parcels || []).some(p => p.contours && p.contours.length);
   note.hidden = has || !!M.draw;
   if(!M.fitted && has){ fitFields(M); M.fitted = true; }
 }
 function fitFields(M){
-  const b = bboxOf(M.fields); if(!b) return;
+  const b = bboxOf([...M.fields, ...(M.parcels || [])]); if(!b) return;
   M.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 0, maxZoom: 15 });
 }
 function updateDraw(M){
@@ -438,10 +455,10 @@ function updateDraw(M){
 function createMap(key){
   const el = document.createElement("div"); el.className = "mapbox";
   el.innerHTML = `<div class="mapgl"></div>
-    <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button></div>
+    <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button><button type="button" data-kad title="Публічна кадастрова карта України">Кадастр</button></div>
     <div class="mapnote">Контурів полів ще немає. Намалюйте поле на карті або імпортуйте KML/GeoJSON у розділі «Поля і карта».</div>
     <div class="drawbar" hidden><span></span><button type="button" data-dundo>Крок назад</button><button type="button" data-dcancel>Скасувати</button><button type="button" class="pri" data-ddone>Завершити</button></div>`;
-  const M = { el, key, fields: [], fitted: false, draw: null };
+  const M = { el, key, fields: [], parcels: [], fitted: false, draw: null, parcelsFirst: key === "land" };
   if(typeof maplibregl === "undefined"){ el.querySelector(".mapgl").innerHTML = `<div class="empty" style="color:#fff">Карта не завантажилась. Перевірте інтернет і оновіть сторінку.</div>`; M.map = { getSource(){ return null; }, resize(){} }; return M; }
   const map = new maplibregl.Map({ container: el.querySelector(".mapgl"), style: STYLES[mapStyle], center: [30.43, 48.39], zoom: 10, attributionControl: { compact: true }, dragRotate: false });
   M.map = map;
@@ -456,13 +473,24 @@ function createMap(key){
     popup.setLngLat(e.lngLat).setHTML(`<b>${esc(p.name)}</b><br>${esc(p.group)} · ${fmt(Number(p.area))} га<br>${esc(p.crop || "культура не вказана")}${p.variety ? ", " + esc(p.variety) : ""}`).addTo(map);
   });
   map.on("mouseleave", "f-fill", () => { map.getCanvas().style.cursor = M.draw ? "crosshair" : ""; popup.remove(); });
+  map.on("mousemove", "p-fill", e => {
+    if(M.draw) return;
+    if(map.queryRenderedFeatures(e.point, { layers: ["f-fill"] }).length && !M.parcelsFirst) return;
+    map.getCanvas().style.cursor = "pointer";
+    const p = e.features[0].properties;
+    popup.setLngLat(e.lngLat).setHTML(`<b>${esc(p.cad || "ділянка без номера")}</b><br>${fmt(Number(p.area), 4)} га · ${esc(p.status)}<br>${esc(p.owner || "")}${p.council ? "<br>" + esc(p.council) : ""}`).addTo(map);
+  });
+  map.on("mouseleave", "p-fill", () => { map.getCanvas().style.cursor = M.draw ? "crosshair" : ""; popup.remove(); });
   map.on("click", e => {
     if(M.draw){ M.draw.pts.push([+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)]); updateDraw(M); return; }
+    const ph = map.queryRenderedFeatures(e.point, { layers: ["p-fill"] })[0];
+    if(ph && M.parcelsFirst){ pickParcel(ph.properties.pid); return; }
     const hit = map.queryRenderedFeatures(e.point, { layers: ["f-fill"] })[0];
-    if(hit) pickField(hit.properties.fid);
+    if(hit) pickField(hit.properties.fid); else if(ph) pickParcel(ph.properties.pid);
   });
   el.querySelectorAll("[data-ms]").forEach(b => b.onclick = () => setMapStyle(b.dataset.ms));
   el.querySelector("[data-fit]").onclick = () => fitFields(M);
+  el.querySelector("[data-kad]").onclick = toggleKadastr; el.querySelector("[data-kad]").classList.toggle("on", showKadastr);
   el.querySelector("[data-dundo]").onclick = () => { if(M.draw){ M.draw.pts.pop(); updateDraw(M); } };
   el.querySelector("[data-dcancel]").onclick = () => stopDraw(M);
   el.querySelector("[data-ddone]").onclick = () => {
@@ -483,13 +511,14 @@ function startDraw(key, onDone){
   updateMapData(M); M.el.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
+function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
 function pickField(fid){ state.fieldSel = fid; if(state.view !== "fields") location.hash = "fields"; else render(); }
 function attachMaps(){
   document.querySelectorAll(".mapslot").forEach(slot => {
     const key = slot.dataset.slot;
     const M = MAPS[key] || (MAPS[key] = createMap(key));
     slot.appendChild(M.el);
-    M.fields = pendingMaps[key] || [];
+    const pm = pendingMaps[key] || {}; M.fields = pm.fields || []; M.parcels = pm.parcels || [];
     requestAnimationFrame(() => { M.map.resize(); updateMapData(M); });
   });
 }
@@ -660,6 +689,7 @@ function fieldCard(f){
       ${f.note?`<dt>Примітка</dt><dd>${esc(f.note)}</dd>`:""}
     </dl>
     ${years.length?`<h2 style="margin-top:16px">Історія культур</h2><div class="legend">${years.map(y=>`<span><b>${y}</b> ${cropTag(f.seasons[y].crop)}</span>`).join("")}</div>`:""}
+    ${(() => { const ps = S.parcels.filter(p => (p.fieldIds||[]).includes(f.id)); return ps.length ? `<h2 style="margin-top:16px">Земельні ділянки (${ps.length}) · ${fmt(sum(ps,p=>p.area),2)} га</h2><div class="tw"><table><tbody>${ps.map(p => { const l = parcelActiveLease(p); return `<tr class="click" data-parcel="${esc(p.id)}"><td>${esc(p.cadastre||"—")}<div class="note">${esc(nameOf("owners",p.ownerId)||"")}</div></td><td class="n">${fmt(num(p.area),4)} га</td><td>${l?leasePill(l)+`<div class="note">до ${fdate(l.dateTo)}</div>`:`<span class="pill st-cancel">${esc(parcelStatus(p))}</span>`}</td></tr>`; }).join("")}</tbody></table></div>` : ""; })()}
     <h2 style="margin-top:16px">Агрооперації (${ops.length})</h2>
     ${ops.length ? `<div class="tw"><table><tbody>${ops.slice(0,15).map(o=>`<tr class="click" data-op="${esc(o.id)}"><td>${esc(opTitle(o))}<div class="note">сезон ${esc(o.season)} · ${fdate(o.factFrom||o.plannedFrom)}</div></td><td>${statusPill(o.status)}</td><td class="n">${fmt(opDone(o))} / ${fmt(opPlanned(o))} га</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Ще немає.</p>`}
   </div>`;
@@ -1058,6 +1088,609 @@ function viewReports(){
       </tbody></table></div>` : `<div class="card"><div class="empty"><b>Даних для звіту немає</b>${needsPeriod?"Змініть період або внесіть завдання техніки.":"Внесіть поля й агрооперації сезону."}</div></div>`);
 }
 
+/* ---------- land bank (земельний банк) ---------- */
+const PURPOSES = ["01.01 Для ведення товарного сільськогосподарського виробництва","01.02 Для ведення фермерського господарства","01.03 Для ведення особистого селянського господарства","01.04 Для ведення підсобного сільського господарства","01.05 Для індивідуального садівництва","01.06 Для колективного садівництва","01.07 Для городництва","01.08 Для сінокосіння і випасання худоби","01.09 Для дослідних і навчальних цілей","01.10 Для пропаганди передового досвіду ведення сільського господарства","01.11 Для надання послуг у сільському господарстві","01.12 Для розміщення інфраструктури оптових ринків сільськогосподарської продукції","01.13 Для іншого сільськогосподарського призначення"];
+const LAND_TYPES = ["Рілля","Землі сільськогосподарського призначення","Пасовища","Сіножаті","Багаторічні насадження","Перелоги","Інше"];
+const LAND_CATEGORIES = ["Землі сільськогосподарського призначення","Землі житлової та громадської забудови","Землі природно-заповідного фонду","Землі лісогосподарського призначення","Землі водного фонду","Землі промисловості, транспорту та іншого призначення","Землі запасу"];
+const OWNERSHIP = ["Приватна","Комунальна","Державна"];
+const PLANNED_ACTIONS = ["Укласти договір","Продовжити договір","Переукласти договір","Зареєструвати право","Викупити","Розірвати договір","Повернути власнику"];
+const DOC_TYPES = ["Взята в оренду","Взята в суборенду","Здана в оренду","Здана в суборенду","Емфітевзис","Власність","Сервітут","Інше"];
+const DOC_SUBTYPES = ["Фіксований в % до НГО","Фіксована сума","Натуральна оплата","Змішана оплата","Без оплати"];
+const DOC_STATUSES = ["зареєстрований","на реєстрації","підписаний","проєкт","розірваний","закінчився"];
+const RIGHT_TYPES = ["Оренда","Суборенда","Емфітевзис","Власність","Сервітут","Користування"];
+const CP_KINDS = ["Фізична особа","ФОП","Юридична особа"];
+const STATUS_BY_DOC = { "Взята в оренду":"Взяті в оренду", "Взята в суборенду":"Взяті в суборенду", "Здана в оренду":"Здані в оренду", "Здана в суборенду":"Здані в суборенду", "Емфітевзис":"Емфітевзис", "Власність":"Власність", "Сервітут":"Сервітут" };
+const RENT_DOC_TYPES = ["Взята в оренду","Взята в суборенду","Емфітевзис"];
+const CAD_RE = /^\d{10}:\d{2}:\d{3}:\d{4}$/;
+
+function landSettings(){ const s = S.settings.find(x => x.id === "land") || {}; return { pdfo: s.pdfo ?? 18, vz: s.vz ?? 5, renewSoonDays: s.renewSoonDays ?? 180 }; }
+const cpName = id => nameOf("owners", id);
+function docParcels(l){ return (l.parcelIds || []).map(id => byId("parcels", id)).filter(Boolean); }
+function docCalcArea(l){ return sum(docParcels(l), p => num(p.area) * num(l.share || 100) / 100); }
+function docArea(l){ return num(l.area) || docCalcArea(l); }
+function docNgo(l){ return num(l.ngo) || sum(docParcels(l), p => num(p.ngo) * num(l.share || 100) / 100); }
+function docYearPrice(l){ if(l.subtype === "Фіксований в % до НГО") return docNgo(l) * num(l.rentPercent) / 100; return num(l.pricePerYear); }
+function docEnd(l){ return l.factEnd || l.dateTo || ""; }
+function docState(l){
+  const td = today();
+  if(l.archived) return "archived";
+  if(l.status === "розірваний") return "broken";
+  if(["проєкт","підписаний","на реєстрації"].includes(l.status)) return "reg";
+  const end = docEnd(l);
+  if(end && end < td) return l.autoRenew ? "renewed" : "ended";
+  if(end && (new Date(end) - new Date(td)) / 864e5 <= landSettings().renewSoonDays) return "soon";
+  return "active";
+}
+const DSTATE = { active:["Діючий","st-done"], soon:["Закінчується","st-progress"], renewed:["Автоподовжений","st-done"], ended:["Закінчився","st-cancel"], reg:["Оформлення","st-planned"], broken:["Розірваний","st-cancel"], archived:["В архіві","st-cancel"] };
+const docIsActive = l => ["active","soon","renewed","reg"].includes(docState(l));
+function docPill(l){ const [t, c] = DSTATE[docState(l)]; return `<span class="pill ${c}">${t}</span>`; }
+function daysLeft(l){ const e = docEnd(l); if(!e) return null; return Math.round((new Date(e) - new Date(today())) / 864e5); }
+function parcelDocs(p){ return S.leases.filter(l => (l.parcelIds || []).includes(p.id)); }
+function parcelActiveDoc(p){ return parcelDocs(p).filter(docIsActive).sort((a,b) => (docEnd(b)||"9999").localeCompare(docEnd(a)||"9999"))[0]; }
+const parcelActiveLease = parcelActiveDoc;
+const leasePill = docPill;
+function parcelStatus(p){
+  const d = parcelActiveDoc(p);
+  if(d) return STATUS_BY_DOC[d.type] || "Без типу";
+  if(parcelDocs(p).some(l => ["ended","broken"].includes(docState(l)))) return "Закінчився";
+  return "Без типу";
+}
+function parcelColorKey(p){ const d = parcelActiveDoc(p); if(d && docState(d) === "soon") return "Закінчується"; return parcelStatus(p); }
+function parcelRightEnd(p){ return parcelDocs(p).filter(docIsActive).map(docEnd).filter(Boolean).sort().pop() || ""; }
+function rentForYear(l, year){
+  const price = docYearPrice(l); if(!price) return 0;
+  const ys = new Date(year + "-01-01"), ye = new Date(year + "-12-31");
+  const a = l.dateFrom ? new Date(l.dateFrom) : ys;
+  let b = docEnd(l) ? new Date(docEnd(l)) : ye;
+  if(l.autoRenew && b < ye) b = ye;
+  const from = a > ys ? a : ys, to = b < ye ? b : ye;
+  if(to < from) return 0;
+  return price * ((to - from) / 864e5 + 1) / ((ye - ys) / 864e5 + 1);
+}
+function taxRateFor(l){ const cp = byId("owners", l.ownerId); if(cp && cp.kind === "Юридична особа") return 0; const s = landSettings(); return num(s.pdfo) + num(s.vz); }
+
+function landKpis(){
+  const ps = S.parcels.filter(p => !p.archived);
+  const act = ps.filter(p => parcelActiveDoc(p));
+  const own = ps.filter(p => parcelStatus(p) === "Власність");
+  const docs = S.leases.filter(l => !l.archived);
+  const year = state.rentYear;
+  const rentDocs = docs.filter(l => RENT_DOC_TYPES.includes(l.type));
+  const accrued = sum(rentDocs, l => rentForYear(l, year));
+  const paid = sum(S.payments.filter(x => Number(x.year) === year), x => num(x.gross) || num(x.net));
+  return { ps, act, own, docs, accrued, paid,
+    area: sum(ps, p => p.area), actArea: sum(act, p => p.area), ownArea: sum(own, p => p.area), freeArea: sum(ps.filter(p => !parcelActiveDoc(p)), p => p.area),
+    activeDocs: docs.filter(docIsActive).length, soon: docs.filter(l => docState(l) === "soon"), ended: docs.filter(l => docState(l) === "ended") };
+}
+
+function viewLand(){
+  const T = state.landTab;
+  const tabs = [["overview","Огляд"],["parcels","Земельні ділянки"],["docs","Земельні документи"],["owners","Контрагенти"],["rent","Орендна плата"],["analysis","Аналіз земельних ресурсів"]];
+  const body = { overview: landOverview, parcels: landParcels, docs: landDocs, owners: landOwners, rent: landRent, analysis: landAnalysis }[T] || landOverview;
+  return header("Земельний банк", `<button class="btn" type="button" data-act="landImport">Імпорт з Excel/CSV</button><button class="btn" type="button" data-act="parcelGeoImport">Імпорт контурів</button><button class="btn pri" type="button" data-act="newParcel">+ Ділянка</button><button class="btn pri" type="button" data-act="newDoc">+ Документ</button>`) + statusBanner() +
+    `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-landtab="${k}">${esc(l)}</button>`).join("")}</div>` + body();
+}
+
+function landOverview(){
+  const K = landKpis();
+  const councils = {};
+  K.ps.forEach(p => { const c = p.council || "Не вказано"; const x = councils[c] ||= { n:0, area:0, act:0, own:0, free:0, ngo:0 }; x.n++; x.area += num(p.area); x.ngo += num(p.ngo); const st = parcelStatus(p); if(st === "Власність") x.own += num(p.area); else if(parcelActiveDoc(p)) x.act += num(p.area); else x.free += num(p.area); });
+  const soon = [...K.soon, ...K.ended.filter(l => (daysLeft(l) ?? 0) > -365)].sort((a,b) => (docEnd(a)).localeCompare(docEnd(b))).slice(0, 15);
+  return `<div class="kpis">
+    <div class="kpi"><b>${K.ps.length}</b><span>ділянок · ${fmt(K.area, 2)} га</span></div>
+    <div class="kpi"><b>${fmt(K.actArea, 2)}</b><span>га з діючими документами</span></div>
+    <div class="kpi"><b>${fmt(K.ownArea, 2)}</b><span>га у власності</span></div>
+    <div class="kpi"><b style="color:${K.freeArea?"var(--warn)":"inherit"}">${fmt(K.freeArea, 2)}</b><span>га без діючих документів</span></div>
+    <div class="kpi"><b>${K.activeDocs}</b><span>діючих документів</span></div>
+    <div class="kpi"><b style="color:${K.soon.length?"var(--warn)":"inherit"}">${K.soon.length}</b><span>закінчуються за ${landSettings().renewSoonDays} днів</span></div>
+    <div class="kpi"><b>${fmt0(K.accrued)}</b><span>грн оренди за ${state.rentYear} · виплачено ${fmt0(K.paid)}</span></div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h2>Карта земельних ділянок</h2>${mapHtml("land", S.fields.filter(f => !f.archived), K.ps)}${parcelLegend(K.ps)}</div>
+    <div class="grid" style="align-content:start">
+      <div class="card"><h2>Договори, що закінчуються або закінчились</h2>${soon.length ? `<div class="tw"><table><thead><tr><th>Документ</th><th>Контрагент</th><th class="n">Га</th><th>До</th><th class="n">Днів</th></tr></thead><tbody>${soon.map(l => `<tr class="click" data-lease="${esc(l.id)}"><td>${esc(l.number || "#")}<div class="note">${esc(l.type || "")}</div></td><td>${esc(cpName(l.ownerId) || "—")}</td><td class="n">${fmt(docArea(l), 2)}</td><td>${fdate(docEnd(l))}</td><td class="n" style="color:${(daysLeft(l)??0)<0?"var(--bad)":"var(--warn)"}">${daysLeft(l)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Немає договорів, що закінчуються найближчим часом.</p>`}</div>
+      <div class="card"><h2>Структура за сільськими радами, га</h2>${Object.keys(councils).length ? `<div class="tw"><table><thead><tr><th>Сільська рада</th><th class="n">Ділянок</th><th class="n">Площа</th><th class="n">Документи</th><th class="n">Власність</th><th class="n">Без док.</th><th class="n">НГО, грн</th></tr></thead><tbody>${Object.entries(councils).sort((a,b)=>b[1].area-a[1].area).map(([c,x]) => `<tr><td>${esc(c)}</td><td class="n">${x.n}</td><td class="n">${fmt(x.area,2)}</td><td class="n">${fmt(x.act,2)}</td><td class="n">${fmt(x.own,2)}</td><td class="n">${x.free?fmt(x.free,2):"—"}</td><td class="n">${x.ngo?fmt0(x.ngo):"—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Додайте земельні ділянки або імпортуйте їх з Excel.</p>`}</div>
+    </div>
+  </div>`;
+}
+function parcelLegend(ps){
+  const c = {}; ps.forEach(p => { const k = parcelColorKey(p); c[k] = (c[k] || 0) + num(p.area); });
+  return `<div class="legend">${Object.entries(c).map(([k,a]) => `<span class="crop"><i class="dot" style="background:${PARCEL_COLORS[k]||"#bdbdbd"}"></i>${esc(k)} <span class="muted">${fmt(a,2)} га</span></span>`).join("")}<span class="muted">Пунктир — ділянки, заливка — поля.</span></div>`;
+}
+
+function landFilteredParcels(){
+  const q = state.landQ.toLowerCase();
+  return S.parcels.filter(p => (!state.landCouncil || (p.council||"") === state.landCouncil) && (!state.landStatus || parcelStatus(p) === state.landStatus || (state.landStatus==="Архів" && p.archived)) && (state.landStatus==="Архів" || !p.archived)
+    && (!q || [p.cadastre, p.council, p.group, p.ownerName, cpName(p.ownerId), p.onm, p.regNumber].join(" ").toLowerCase().includes(q)))
+    .sort((a,b) => (a.group||"").localeCompare(b.group||"","uk") || (a.cadastre||"").localeCompare(b.cadastre||""));
+}
+function landFilters(withStatus){
+  const councils = [...new Set(S.parcels.map(p => p.council).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"uk"));
+  const statuses = ["Взяті в оренду","Взяті в суборенду","Здані в оренду","Здані в суборенду","Емфітевзис","Власність","Сервітут","Без типу","Закінчився","Архів"];
+  return `<div class="filters"><input id="lq" placeholder="Пошук: кадастровий номер, власник, рада, ОНМ" value="${esc(state.landQ)}" style="flex:1;min-width:220px">
+    <select id="lc">${opt("", "Усі сільські ради", state.landCouncil)}${councils.map(c => opt(c, c, state.landCouncil)).join("")}</select>
+    ${withStatus ? `<select id="ls">${opt("", "Усі статуси", state.landStatus)}${statuses.map(s => opt(s, s, state.landStatus)).join("")}</select>` : ""}</div>`;
+}
+function landParcels(){
+  const list = landFilteredParcels();
+  let lastG = null;
+  return landFilters(true) + `<div class="filters"><span class="muted">${list.length} ділянок · ${fmt(sum(list,p=>p.area),4)} га кадастрової площі</span><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvParcels">Експорт</button></div>
+  <div class="tw"><table><thead><tr><th>Кадастровий номер</th><th class="n">Кадастрова, га</th><th class="n">Розрах., га</th><th class="n">Використ., га</th><th>Сільська рада</th><th>Цільове призначення</th><th>Власник</th><th>Статус за документами</th><th>Право до</th><th class="n">НГО, грн</th><th>Поля</th></tr></thead><tbody>
+  ${list.length ? list.map(p => { let g = ""; if(p.group !== lastG){ lastG = p.group; const gl = list.filter(x => x.group === p.group); g = `<tr class="grp"><td>${esc(p.group || "Без групи")}</td><td class="n">${fmt(sum(gl,x=>x.area),4)}</td><td colspan="9" class="muted">${gl.length} діл.</td></tr>`; }
+    const st = parcelStatus(p), ck = parcelColorKey(p);
+    return g + `<tr class="click" data-parcel="${esc(p.id)}"><td><b>${esc(p.cadastre || "без номера")}</b>${p.contours?"":` <span class="muted" title="немає контуру">◌</span>`}${p.demo?` <span class="pill st-cancel">приклад</span>`:""}<div class="note">${esc(p.regNumber ? "№ " + p.regNumber : "")}${p.onm ? " · ОНМ " + esc(p.onm) : ""}</div></td>
+    <td class="n">${fmt(num(p.area),4)}</td><td class="n">${p.calcArea?fmt(num(p.calcArea),4):"—"}</td><td class="n">${p.usedArea?fmt(num(p.usedArea),4):"—"}</td><td>${esc(p.council||"—")}</td><td>${esc((p.purpose||"").slice(0,5))}</td>
+    <td>${esc(cpName(p.ownerId) || p.ownerName || "—")}</td><td><span class="crop"><i class="dot" style="background:${PARCEL_COLORS[ck]||"#bdbdbd"}"></i>${esc(ck === "Закінчується" ? st + " · закінчується" : st)}</span></td><td>${fdate(parcelRightEnd(p))}</td><td class="n">${p.ngo?fmt0(num(p.ngo)):"—"}</td>
+    <td>${(p.fieldIds||[]).map(id => esc(nameOf("fields", id))).filter(Boolean).join(", ") || "—"}</td></tr>`; }).join("")
+    : `<tr><td colspan="11"><div class="empty"><b>Ділянок не знайдено</b>Додайте ділянку або імпортуйте список з Excel (той самий формат, що вивантажує Cropwise).</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function landDocs(){
+  const q = state.landQ.toLowerCase();
+  const list = S.leases.filter(l => (state.landStatus === "Архів" ? l.archived : !l.archived)
+      && (!state.landCouncil || (l.council||"") === state.landCouncil || docParcels(l).some(p => p.council === state.landCouncil))
+      && (!q || [l.number, l.type, cpName(l.ownerId), cpName(l.agentId), l.council, l.registrar, ...docParcels(l).map(p => p.cadastre)].join(" ").toLowerCase().includes(q)))
+    .sort((a,b) => (b.regDate||"").localeCompare(a.regDate||""));
+  const councils = [...new Set([...S.parcels.map(p => p.council), ...S.leases.map(l => l.council)].filter(Boolean))].sort((a,b)=>a.localeCompare(b,"uk"));
+  return `<div class="filters"><input id="lq" placeholder="Пошук: номер, контрагент, кадастровий номер, реєстратор" value="${esc(state.landQ)}" style="flex:1;min-width:220px">
+    <select id="lc">${opt("", "Усі сільські ради", state.landCouncil)}${councils.map(c => opt(c, c, state.landCouncil)).join("")}</select>
+    <select id="ls">${opt("", "Активні", state.landStatus==="Архів"?"":"")}${opt("Архів","В архіві",state.landStatus)}</select>
+    <span class="muted">${list.length} док. · ${fmt(sum(list, docArea), 2)} га</span><button class="btn sm" type="button" data-act="csvDocs">Експорт</button></div>
+  <div class="tw"><table><thead><tr><th>Документ</th><th>Тип / підтип</th><th>Статус</th><th>Контрагент</th><th>Агент</th><th>Ділянки</th><th class="n">Площа, га</th><th>Від</th><th>До</th><th class="n">Днів</th><th class="n">НГО, грн</th><th class="n">Ціна за рік, грн</th><th>Реєстрація</th></tr></thead><tbody>
+  ${list.length ? list.map(l => { const dl = daysLeft(l); const ps = docParcels(l);
+    return `<tr class="click" data-lease="${esc(l.id)}"><td><b>${esc(l.number || "#")}</b>${l.version?`<div class="note">версія ${esc(l.version)}</div>`:""}${l.demo?` <span class="pill st-cancel">приклад</span>`:""}</td><td>${esc(l.type||"—")}<div class="note">${esc(l.subtype||"")}${l.subtype==="Фіксований в % до НГО"&&l.rentPercent?" · "+fmt(num(l.rentPercent),1)+"%":""}</div></td>
+    <td>${docPill(l)}<div class="note">${esc(l.status||"")}</div></td><td>${esc(cpName(l.ownerId)||"—")}<div class="note">${esc((byId("owners",l.ownerId)||{}).code||"")}</div></td><td>${esc(cpName(l.agentId)||"—")}</td>
+    <td>${ps.slice(0,2).map(p=>esc(p.cadastre)).join("<br>")}${ps.length>2?`<div class="note">+${ps.length-2}</div>`:""}</td><td class="n">${fmt(docArea(l),2)}</td><td>${fdate(l.dateFrom)}</td><td>${fdate(docEnd(l))}${l.autoRenew?`<div class="note">автоподовження</div>`:""}</td>
+    <td class="n" style="color:${dl!=null&&dl<0?"var(--bad)":dl!=null&&dl<=landSettings().renewSoonDays?"var(--warn)":"inherit"}">${dl ?? "—"}</td><td class="n">${docNgo(l)?fmt0(docNgo(l)):"—"}</td><td class="n">${docYearPrice(l)?fmt(docYearPrice(l)):"—"}</td><td>${fdate(l.regDate)}</td></tr>`; }).join("")
+    : `<tr><td colspan="13"><div class="empty"><b>Документів немає</b>Додайте договір оренди, суборенди, емфітевзису або документ права власності.</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function landOwners(){
+  const q = state.landQ.toLowerCase();
+  const list = sorted("owners").filter(o => !q || [o.name, o.code, o.phone, o.address].join(" ").toLowerCase().includes(q));
+  const year = state.rentYear;
+  return `<div class="filters"><input id="lq" placeholder="Пошук: ПІБ / назва, ІПН / ЄДРПОУ, телефон" value="${esc(state.landQ)}" style="flex:1;min-width:220px">
+    <button class="btn" type="button" data-act="csvOwners">Експорт: звичайний</button><button class="btn" type="button" data-act="csvOwnersBank">Експорт: з банківськими даними</button><button class="btn pri" type="button" data-act="newOwner">+ Контрагент</button></div>
+  <div class="tw"><table><thead><tr><th>Контрагент</th><th>Тип</th><th>Код</th><th>Телефон</th><th class="n">Документів</th><th class="n">Ділянок</th><th class="n">Площа, га</th><th class="n">Оренда ${year}, грн</th><th class="n">Виплачено ${year}</th><th>Банк</th></tr></thead><tbody>
+  ${list.length ? list.map(o => { const docs = S.leases.filter(l => l.ownerId === o.id && !l.archived); const parcels = S.parcels.filter(p => p.ownerId === o.id); const acc = sum(docs.filter(l=>RENT_DOC_TYPES.includes(l.type)), l => rentForYear(l, year)); const paid = sum(S.payments.filter(x => x.ownerId === o.id && Number(x.year) === year), x => num(x.gross) || num(x.net));
+    return `<tr class="click" data-owner="${esc(o.id)}"><td><b>${esc(o.name)}</b>${o.isOwn?` <span class="pill st-done">наша юрособа</span>`:""}${o.deceased?` <span class="pill st-cancel">помер</span>`:""}${o.demo?` <span class="pill st-cancel">приклад</span>`:""}<div class="note">${esc(o.address||"")}</div></td><td>${esc(o.kind||"")}</td><td>${esc(o.code||"")}</td><td>${esc(o.phone||"")}</td>
+    <td class="n">${docs.length||"—"}</td><td class="n">${parcels.length||"—"}</td><td class="n">${parcels.length?fmt(sum(parcels,p=>p.area),2):"—"}</td><td class="n">${acc?fmt(acc):"—"}</td><td class="n">${paid?fmt(paid):"—"}</td><td>${esc(o.bankName||"")}${o.iban?`<div class="note">${esc(o.iban)}</div>`:""}</td></tr>`; }).join("")
+    : `<tr><td colspan="10"><div class="empty"><b>Контрагентів немає</b>Пайовики, власники ділянок, а також ваші юрособи-орендарі (агенти).</div></td></tr>`}
+  </tbody></table></div>`;
+}
+function rentRows(year){
+  return S.leases.filter(l => RENT_DOC_TYPES.includes(l.type) && !l.archived).map(l => {
+    const acc = rentForYear(l, year); const rate = taxRateFor(l); const tax = acc * rate / 100;
+    const pays = S.payments.filter(x => x.docId === l.id && Number(x.year) === year);
+    const paidGross = sum(pays, x => num(x.gross) || (num(x.net) + num(x.tax)));
+    const paidNet = sum(pays, x => num(x.net));
+    return { l, acc, tax, payable: acc - tax, paidGross, paidNet, debt: acc - paidGross };
+  }).filter(r => r.acc || r.paidGross);
+}
+function landRent(){
+  const year = state.rentYear; const rows = rentRows(year); const s = landSettings();
+  const pays = S.payments.filter(x => Number(x.year) === year).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const years = []; for(let y = new Date().getFullYear() + 1; y >= new Date().getFullYear() - 5; y--) years.push(y);
+  return `<div class="filters"><span class="muted">Рік</span><select id="ry">${years.map(y=>opt(y,y,year)).join("")}</select>
+    <span class="muted">Утримання з фізосіб: ПДФО ${fmt(s.pdfo,1)}% + військовий збір ${fmt(s.vz,1)}%</span><button class="btn sm" type="button" data-act="landSettings">Змінити ставки</button>
+    <span style="flex:1"></span><button class="btn" type="button" data-act="csvRent">Експорт відомості</button><button class="btn pri" type="button" data-act="newPayment">+ Виплата</button></div>
+  <div class="kpis"><div class="kpi"><b>${fmt0(sum(rows,r=>r.acc))}</b><span>грн нараховано за ${year}</span></div><div class="kpi"><b>${fmt0(sum(rows,r=>r.tax))}</b><span>грн податків до утримання</span></div><div class="kpi"><b>${fmt0(sum(rows,r=>r.paidGross))}</b><span>грн виплачено (брутто)</span></div><div class="kpi"><b style="color:${sum(rows,r=>r.debt)>0.5?"var(--warn)":"inherit"}">${fmt0(sum(rows,r=>Math.max(0,r.debt)))}</b><span>грн залишок до виплати</span></div></div>
+  <div class="card" style="margin-bottom:16px"><h2>Відомість орендної плати ${year}</h2>${rows.length ? `<div class="tw"><table><thead><tr><th>Контрагент</th><th>Документ</th><th class="n">Площа, га</th><th class="n">НГО, грн</th><th class="n">Ставка</th><th class="n">Нараховано</th><th class="n">Податки</th><th class="n">До виплати</th><th class="n">Виплачено</th><th class="n">Залишок</th></tr></thead><tbody>
+    ${rows.sort((a,b)=>(cpName(a.l.ownerId)||"").localeCompare(cpName(b.l.ownerId)||"","uk")).map(r => `<tr class="click" data-lease="${esc(r.l.id)}"><td>${esc(cpName(r.l.ownerId)||"—")}</td><td>${esc(r.l.number||"#")}<div class="note">${fdate(r.l.dateFrom)} – ${fdate(docEnd(r.l))}</div></td><td class="n">${fmt(docArea(r.l),2)}</td><td class="n">${docNgo(r.l)?fmt0(docNgo(r.l)):"—"}</td><td class="n">${r.l.subtype==="Фіксований в % до НГО"?fmt(num(r.l.rentPercent),1)+"%":esc(r.l.subtype||"")}</td><td class="n">${fmt(r.acc)}</td><td class="n">${fmt(r.tax)}</td><td class="n">${fmt(r.payable)}</td><td class="n">${r.paidGross?fmt(r.paidGross):"—"}</td><td class="n" style="color:${r.debt>0.5?"var(--warn)":r.debt<-0.5?"var(--info)":"inherit"}">${fmt(r.debt)}</td></tr>`).join("")}
+    <tr class="grp"><td colspan="5">Разом</td><td class="n">${fmt(sum(rows,r=>r.acc))}</td><td class="n">${fmt(sum(rows,r=>r.tax))}</td><td class="n">${fmt(sum(rows,r=>r.payable))}</td><td class="n">${fmt(sum(rows,r=>r.paidGross))}</td><td class="n">${fmt(sum(rows,r=>r.debt))}</td></tr></tbody></table></div>` : `<p class="note">Немає договорів оренди, діючих у ${year} році, або не вказана ставка / ціна за рік.</p>`}</div>
+  <div class="card"><h2>Виплати ${year} (${pays.length})</h2>${pays.length ? `<div class="tw"><table><thead><tr><th>Дата</th><th>Контрагент</th><th>Документ</th><th>Вид</th><th class="n">Брутто</th><th class="n">Податки</th><th class="n">Виплачено</th><th>Натуральна частина</th></tr></thead><tbody>${pays.map(x => `<tr class="click" data-pay="${esc(x.id)}"><td>${fdate(x.date)}</td><td>${esc(cpName(x.ownerId)||"—")}</td><td>${esc((byId("leases",x.docId)||{}).number||"—")}</td><td>${esc(x.kind||"")}</td><td class="n">${fmt(num(x.gross))}</td><td class="n">${fmt(num(x.tax))}</td><td class="n">${fmt(num(x.net))}</td><td>${esc(x.natural||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Виплат за цей рік ще немає.</p>`}</div>`;
+}
+
+/* intersection analysis with turf */
+let turfLoading = null;
+function loadScript(src){ return new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => fail(new Error("Не вдалося завантажити " + src)); document.head.appendChild(s); }); }
+function ensureTurf(){ if(window.turf) return Promise.resolve(); return turfLoading ||= loadScript("https://unpkg.com/@turf/turf@7.1.0/turf.min.js"); }
+let landAnalysisCache = null;
+function landAnalysis(){
+  if(!window.turf){ ensureTurf().then(() => { landAnalysisCache = null; render(); }).catch(e => toast(e.message)); return `<div class="card"><div class="empty">Завантажую інструмент для розрахунку перетинів…</div></div>`; }
+  const fields = S.fields.filter(f => !f.archived && f.contours && f.contours.length);
+  const parcels = S.parcels.filter(p => !p.archived && p.contours && p.contours.length);
+  const key = fields.map(f => f.id + f.updatedAt).join() + "|" + parcels.map(p => p.id + p.updatedAt).join() + "|" + S.leases.map(l => l.updatedAt).join();
+  if(!landAnalysisCache || landAnalysisCache.key !== key) landAnalysisCache = { key, rows: computeIntersections(fields, parcels) };
+  const rows = landAnalysisCache.rows;
+  const tot = k => sum(rows, r => r[k]);
+  return `<p class="note">Перетин контурів полів із контурами земельних ділянок. Показує, яка частина посівної площі покрита ділянками з діючими документами, а де обробляється земля без документів.</p>
+  <div class="kpis"><div class="kpi"><b>${fmt(tot("field"),2)}</b><span>га полів з контурами</span></div><div class="kpi"><b>${fmt(tot("act"),2)}</b><span>га під ділянками з документами</span></div><div class="kpi"><b style="color:${tot("noDoc")?"var(--warn)":"inherit"}">${fmt(tot("noDoc"),2)}</b><span>га під ділянками без діючих документів</span></div><div class="kpi"><b style="color:${tot("uncovered")>0.5?"var(--bad)":"inherit"}">${fmt(tot("uncovered"),2)}</b><span>га поза ділянками</span></div></div>
+  <div class="filters"><span style="flex:1"></span><button class="btn" type="button" data-act="linkParcels">Прив’язати ділянки до полів за перетином</button><button class="btn" type="button" data-act="csvAnalysis">Експорт</button></div>
+  ${rows.length ? `<div class="tw"><table><thead><tr><th>Поле</th><th>Група</th><th class="n">Площа поля, га</th><th class="n">З документами</th><th class="n">Без документів</th><th class="n">Поза ділянками</th><th class="n">Покриття, %</th><th>Ділянки</th></tr></thead><tbody>
+  ${rows.map(r => { const pct = r.field ? r.act / r.field * 100 : 0; return `<tr class="click" data-field-open="${esc(r.f.id)}"><td><b>${esc(r.f.name)}</b></td><td>${esc(r.f.group||"")}</td><td class="n">${fmt(r.field,2)}</td><td class="n">${fmt(r.act,2)}</td><td class="n" style="color:${r.noDoc?"var(--warn)":"inherit"}">${r.noDoc?fmt(r.noDoc,2):"—"}</td><td class="n" style="color:${r.uncovered>0.5?"var(--bad)":"inherit"}">${r.uncovered>0.01?fmt(r.uncovered,2):"—"}</td><td><div class="bar" title="${fmt0(pct)}%"><i style="width:${Math.min(100,pct)}%"></i></div></td><td class="note">${r.parcels.map(x => esc(x.p.cadastre||"?") + " (" + fmt(x.a,2) + ")").join(", ") || "—"}</td></tr>`; }).join("")}
+  </tbody></table></div>` : `<div class="card"><div class="empty"><b>Немає даних для аналізу</b>Потрібні контури і полів, і земельних ділянок.</div></div>`}`;
+}
+function computeIntersections(fields, parcels){
+  const T = window.turf;
+  const mp = cs => T.multiPolygon(cs.map(r => [r]));
+  const pf = parcels.map(p => { try { const g = mp(p.contours); return { p, g, bb: T.bbox(g), active: !!parcelActiveDoc(p) }; } catch(e){ return null; } }).filter(Boolean);
+  return fields.map(f => {
+    let fg; try { fg = mp(f.contours); } catch(e){ return null; }
+    const fb = T.bbox(fg); const fieldArea = T.area(fg) / 10000;
+    let act = 0, noDoc = 0; const hits = [];
+    pf.forEach(x => {
+      if(x.bb[0] > fb[2] || x.bb[2] < fb[0] || x.bb[1] > fb[3] || x.bb[3] < fb[1]) return;
+      let inter = null; try { inter = T.intersect(T.featureCollection([fg, x.g])); } catch(e){ inter = null; }
+      if(!inter) return;
+      const a = T.area(inter) / 10000; if(a < 0.001) return;
+      hits.push({ p: x.p, a }); if(x.active) act += a; else noDoc += a;
+    });
+    const covered = Math.min(fieldArea, act + noDoc);
+    return { f, field: fieldArea, act: Math.min(act, fieldArea), noDoc: Math.min(noDoc, Math.max(0, fieldArea - act)), uncovered: Math.max(0, fieldArea - covered), parcels: hits.sort((a,b)=>b.a-a.a) };
+  }).filter(Boolean).sort((a,b) => (b.uncovered + b.noDoc) - (a.uncovered + a.noDoc));
+}
+async function linkParcelsByIntersection(){
+  if(!landAnalysisCache) return;
+  const map = {};
+  landAnalysisCache.rows.forEach(r => r.parcels.forEach(x => { if(x.a >= 0.05 || x.a >= num(x.p.area) * 0.1) (map[x.p.id] ||= new Set()).add(r.f.id); }));
+  let n = 0;
+  for(const [pid, set] of Object.entries(map)){
+    const p = byId("parcels", pid); if(!p) continue;
+    const ids = [...new Set([...(p.fieldIds || []), ...set])];
+    if(ids.length !== (p.fieldIds || []).length){ await save("parcels", Object.assign({}, p, { fieldIds: ids })); n++; }
+  }
+  toast(n ? `Оновлено прив’язку для ${n} ділянок` : "Нових збігів не знайдено");
+}
+
+/* dialogs */
+function cpOptions(sel, own){ return opt("", "—", sel) + sorted("owners").filter(o => own == null || !!o.isOwn === own).map(o => opt(o.id, o.name + (o.code ? " · " + o.code : ""), sel)).join(""); }
+function councilDatalist(){ const set = new Set([...S.parcels.map(p => p.council), ...S.leases.map(l => l.council)].filter(Boolean)); return `<datalist id="councilList">${[...set].map(c => `<option value="${esc(c)}">`).join("")}</datalist>`; }
+function parcelDialog(p){
+  const isNew = !p; p = p || { group: "", purpose: PURPOSES[0], landType: "Рілля", ownership: "Приватна", category: LAND_CATEGORIES[0], country: "Україна", fieldIds: [] };
+  const docs = isNew ? [] : parcelDocs(p);
+  const fields = [...S.fields].filter(f => !f.archived).sort((a,b)=>(a.group||"").localeCompare(b.group||"","uk")||a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Нова земельна ділянка" : "Ділянка " + (p.cadastre || ""), wide: true,
+    body: `<div class="f">
+      <label>Кадастровий номер<input id="pCad" value="${esc(p.cadastre||"")}" placeholder="0000000000:00:000:0000"></label>
+      <label>Група полів<input id="pGroup" list="groupList" value="${esc(p.group||"")}"></label>
+      <label>Номер реєстрації (речове право)<input id="pReg" value="${esc(p.regNumber||"")}"></label>
+      <label>Номер ОНМ<input id="pOnm" value="${esc(p.onm||"")}"></label>
+      <label>Кадастрова площа, га<input id="pArea" inputmode="decimal" value="${esc(p.area??"")}"></label>
+      <label>Використовувана площа, га<input id="pUsed" inputmode="decimal" value="${esc(p.usedArea??"")}"></label>
+      <label>Кадастрова вартість (НГО), грн<input id="pNgo" inputmode="decimal" value="${esc(p.ngo??"")}"></label>
+      <label>Рік НГО<input id="pNgoY" inputmode="numeric" value="${esc(p.ngoYear??"")}"></label>
+      <label class="full">Цільове призначення<select id="pPurp">${optsFrom(PURPOSES, p.purpose, "—")}</select></label>
+      <label>Тип землі<select id="pType">${optsFrom(LAND_TYPES, p.landType, "—")}</select></label>
+      <label>Форма власності<select id="pOwnr">${optsFrom(OWNERSHIP, p.ownership, "—")}</select></label>
+      <label>Категорія земель<select id="pCat">${optsFrom(LAND_CATEGORIES, p.category, "—")}</select></label>
+      <label>Власник земельної ділянки<select id="pOwner">${cpOptions(p.ownerId)}</select></label>
+      <label>Сільська рада<input id="pCouncil" list="councilList" value="${esc(p.council||"")}"></label>
+      <label>Район<input id="pDistr" value="${esc(p.district||"")}"></label>
+      <label>Область<input id="pRegion" value="${esc(p.region||"")}"></label>
+      <label>Адреса / урочище<input id="pAddr" value="${esc(p.address||"")}"></label>
+      <label>Запланована дія<select id="pPlan">${optsFrom(PLANNED_ACTIONS, p.plannedAction, "—")}</select></label>
+      <label>Обтяження<input id="pEnc" value="${esc(p.encumbrance||"")}" placeholder="іпотека, арешт, сервітут…"></label>
+      <label>Зовнішній ідентифікатор<input id="pExt" value="${esc(p.externalId||"")}"></label>
+      <label class="full">Опис<textarea id="pDesc">${esc(p.description||"")}</textarea></label>
+      <label class="full">Додаткова інформація<textarea id="pInfo">${esc(p.info||"")}</textarea></label>
+      <label class="full">Поля, які займає ділянка<div class="checks">${fields.map(f => `<label><input type="checkbox" name="pF" value="${esc(f.id)}" ${(p.fieldIds||[]).includes(f.id)?"checked":""}>${esc(f.name)} <span class="muted">${esc(f.group||"")}</span></label>`).join("") || `<span class="note">Полів ще немає</span>`}</div></label>
+      <label><span><input type="checkbox" id="pArch" ${p.archived?"checked":""}> В архіві</span></label>
+    </div>${groupDatalist()}${councilDatalist()}
+    <div class="note">${p.contours ? `Контур: розрахункова площа ${fmt(num(p.calcArea),4)} га.` : "Контуру немає: намалюйте його на карті «Огляд» або імпортуйте KML/GeoJSON (назва = кадастровий номер)."}</div>
+    ${isNew ? "" : `<div><b>Земельні документи (${docs.length})</b>${docs.length ? `<div class="tw" style="margin-top:6px"><table><tbody>${docs.map(l => `<tr><td>${esc(l.number||"#")} · ${esc(l.type||"")}</td><td>${docPill(l)}</td><td>${fdate(l.dateFrom)} – ${fdate(docEnd(l))}</td><td>${esc(cpName(l.ownerId)||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Немає приєднаних документів.</p>`}</div>`}`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="pDraw">${p.contours?"Перемалювати контур":"Намалювати контур"}</button>${p.contours?`<button class="btn" type="button" id="pDrop">Прибрати контур</button>`:""}<button class="btn" type="button" id="pNewDoc">+ Документ на ділянку</button>`,
+    onDelete: isNew ? null : async () => remove("parcels", p.id),
+    onSave: async (m) => {
+      const cad = val(m, "pCad").replace(/\s+/g, "");
+      if(cad && !CAD_RE.test(cad)){ m.querySelector("#pCad").focus(); toast("Кадастровий номер має формат 0000000000:00:000:0000"); return false; }
+      if(cad && S.parcels.some(x => x.cadastre === cad && x.id !== p.id)){ toast("Ділянка з таким кадастровим номером уже є"); return false; }
+      return !!(await save("parcels", Object.assign({}, p, { cadastre: cad, group: val(m,"pGroup"), regNumber: val(m,"pReg"), onm: val(m,"pOnm"), area: num(val(m,"pArea")) || num(p.calcArea), usedArea: val(m,"pUsed")?num(val(m,"pUsed")):"", ngo: val(m,"pNgo")?num(val(m,"pNgo")):"", ngoYear: val(m,"pNgoY"),
+        purpose: val(m,"pPurp"), landType: val(m,"pType"), ownership: val(m,"pOwnr"), category: val(m,"pCat"), ownerId: val(m,"pOwner"), council: val(m,"pCouncil"), district: val(m,"pDistr"), region: val(m,"pRegion"), address: val(m,"pAddr"),
+        plannedAction: val(m,"pPlan"), encumbrance: val(m,"pEnc"), externalId: val(m,"pExt"), description: val(m,"pDesc"), info: val(m,"pInfo"), fieldIds: checked(m,"pF"), archived: m.querySelector("#pArch").checked })));
+    }
+  });
+  if(!isNew){
+    m.querySelector("#pDraw").onclick = () => { closeModal(); state.landTab = "overview"; if(state.view !== "land") location.hash = "land"; else render();
+      setTimeout(() => startDraw("land", async rings => { const ca = +contourArea(rings).toFixed(4); await save("parcels", Object.assign({}, p, { contours: rings, calcArea: ca, area: num(p.area) || ca })); toast("Контур ділянки збережено: " + fmt(ca, 4) + " га"); }), 300); toast("Клацайте по межах ділянки на карті"); };
+    const dr = m.querySelector("#pDrop"); if(dr) dr.onclick = async () => { const c = Object.assign({}, p); delete c.contours; delete c.calcArea; await save("parcels", c); closeModal(); };
+    m.querySelector("#pNewDoc").onclick = () => { closeModal(); docDialog(null, { parcelIds: [p.id], ownerId: p.ownerId || "", council: p.council || "" }); };
+  }
+}
+const leaseDialog = (l) => docDialog(l);
+function docDialog(l, preset){
+  const isNew = !l;
+  const own = S.owners.find(o => o.isOwn);
+  l = l || Object.assign({ type: "Взята в оренду", subtype: "Фіксований в % до НГО", status: "зареєстрований", rightType: "Оренда", share: 100, currency: "UAH", agentId: own ? own.id : "", parcelIds: [] }, preset || {});
+  const pays = isNew ? [] : S.payments.filter(x => x.docId === l.id).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const parcels = [...S.parcels].filter(p => !p.archived || (l.parcelIds||[]).includes(p.id)).sort((a,b) => ((l.parcelIds||[]).includes(b.id) - (l.parcelIds||[]).includes(a.id)) || (a.cadastre||"").localeCompare(b.cadastre||""));
+  const m = openModal({ title: isNew ? "Новий земельний документ" : "Документ " + (l.number || ""), wide: true,
+    body: `<div class="f">
+      <label>Номер документа<input id="dNum" value="${esc(l.number||"")}"></label>
+      <label>Версія договору<input id="dVer" value="${esc(l.version||"")}"></label>
+      <label>Тип документу<select id="dType">${optsFrom(DOC_TYPES, l.type)}</select></label>
+      <label>Підтип документу<select id="dSub">${optsFrom(DOC_SUBTYPES, l.subtype)}</select></label>
+      <label>Статус документа<select id="dStat">${optsFrom(DOC_STATUSES, l.status)}</select></label>
+      <label>Тип права володіння землею<select id="dRight">${optsFrom(RIGHT_TYPES, l.rightType, "—")}</select></label>
+      <label>Дата реєстрації<input id="dReg" type="date" value="${esc(l.regDate||"")}"></label>
+      <label>Частка землі, %<input id="dShare" inputmode="decimal" value="${esc(l.share??100)}"></label>
+      <label>Контрагент (орендодавець / власник)<select id="dOwner">${cpOptions(l.ownerId)}</select></label>
+      <label>Агент (наша юрособа)<select id="dAgent">${cpOptions(l.agentId)}</select></label>
+      <label>Від<input id="dFrom" type="date" value="${esc(l.dateFrom||"")}"></label>
+      <label>До<input id="dTo" type="date" value="${esc(l.dateTo||"")}"></label>
+      <label>Фактична дата завершення<input id="dFact" type="date" value="${esc(l.factEnd||"")}"></label>
+      <label><span><input type="checkbox" id="dAuto" ${l.autoRenew?"checked":""}> Автоматичне подовження</span></label>
+      <label>Період автоподовження, місяців<input id="dAutoM" inputmode="numeric" value="${esc(l.renewMonths??"")}"></label>
+      <label>Площа за документом, га<input id="dArea" inputmode="decimal" value="${esc(l.area??"")}" placeholder="з ділянок"></label>
+      <label>Нормативна грошова оцінка, грн<input id="dNgo" inputmode="decimal" value="${esc(l.ngo??"")}" placeholder="з ділянок"></label>
+      <label>Рік НГО<input id="dNgoY" inputmode="numeric" value="${esc(l.ngoYear??"")}"></label>
+      <label>Ставка, % до НГО<input id="dPct" inputmode="decimal" value="${esc(l.rentPercent??"")}"></label>
+      <label>Ціна за рік, грн<input id="dYear" inputmode="decimal" value="${esc(l.pricePerYear??"")}" placeholder="для фіксованої суми"></label>
+      <label>Планова ціна за рік, грн<input id="dPYear" inputmode="decimal" value="${esc(l.plannedPerYear??"")}"></label>
+      <label>Ціна (разова), грн<input id="dPrice" inputmode="decimal" value="${esc(l.price??"")}"></label>
+      <label>Планова ціна, грн<input id="dPPrice" inputmode="decimal" value="${esc(l.plannedPrice??"")}"></label>
+      <label>Валюта<select id="dCur">${optsFrom(["UAH","USD","EUR"], l.currency||"UAH")}</select></label>
+      <label>Сільська рада<input id="dCouncil" list="councilList" value="${esc(l.council||"")}"></label>
+      <label class="full">Натуральна частина оплати<input id="dNat" value="${esc(l.natural||"")}" placeholder="напр. 500 кг пшениці, оранка городу"></label>
+      <label class="full">Реєстратор<input id="dRegr" value="${esc(l.registrar||"")}"></label>
+      <label>Місце находження документа<input id="dLoc" value="${esc(l.location||"")}"></label>
+      <label>Зовнішній ідентифікатор<input id="dExt" value="${esc(l.externalId||"")}"></label>
+      <label class="full">Опис (підстава реєстрації тощо)<textarea id="dDesc">${esc(l.description||"")}</textarea></label>
+      <label class="full">Додаткова інформація<textarea id="dInfo">${esc(l.info||"")}</textarea></label>
+      <label class="full">Земельні ділянки<input id="dPQ" placeholder="Фільтр: кадастровий номер або сільська рада" style="margin-bottom:4px"><div class="checks" id="dPList" style="max-height:200px">${parcels.map(p => `<label data-q="${esc(((p.cadastre||"")+" "+(p.council||"")).toLowerCase())}"><input type="checkbox" name="dP" value="${esc(p.id)}" ${(l.parcelIds||[]).includes(p.id)?"checked":""}>${esc(p.cadastre||"без номера")} <span class="muted">${fmt(num(p.area),4)} га · ${esc(p.council||"")}</span></label>`).join("") || `<span class="note">Спершу додайте земельні ділянки</span>`}</div></label>
+      <label><span><input type="checkbox" id="dArch" ${l.archived?"checked":""}> В архіві</span></label>
+    </div>${councilDatalist()}
+    <div class="note" id="dCalc"></div>
+    ${isNew ? "" : `<div><b>Виплати за документом (${pays.length})</b>${pays.length ? `<div class="tw" style="margin-top:6px"><table><tbody>${pays.map(x => `<tr><td>${fdate(x.date)}</td><td>${esc(x.year)} р.</td><td class="n">${fmt(num(x.gross))} брутто</td><td class="n">${fmt(num(x.net))} виплачено</td><td>${esc(x.natural||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Виплат ще немає.</p>`}</div>`}`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="dCopy">Копіювати документ</button><button class="btn" type="button" id="dPay">+ Виплата</button>`,
+    onDelete: isNew ? null : async () => remove("leases", l.id),
+    onSave: async (m) => {
+      const o = Object.assign({}, l, { number: val(m,"dNum"), version: val(m,"dVer"), type: val(m,"dType"), subtype: val(m,"dSub"), status: val(m,"dStat"), rightType: val(m,"dRight"), regDate: val(m,"dReg"), share: num(val(m,"dShare")) || 100,
+        ownerId: val(m,"dOwner"), agentId: val(m,"dAgent"), dateFrom: val(m,"dFrom"), dateTo: val(m,"dTo"), factEnd: val(m,"dFact"), autoRenew: m.querySelector("#dAuto").checked, renewMonths: val(m,"dAutoM"),
+        area: val(m,"dArea")?num(val(m,"dArea")):"", ngo: val(m,"dNgo")?num(val(m,"dNgo")):"", ngoYear: val(m,"dNgoY"), rentPercent: val(m,"dPct")?num(val(m,"dPct")):"", pricePerYear: val(m,"dYear")?num(val(m,"dYear")):"", plannedPerYear: val(m,"dPYear")?num(val(m,"dPYear")):"",
+        price: val(m,"dPrice")?num(val(m,"dPrice")):"", plannedPrice: val(m,"dPPrice")?num(val(m,"dPPrice")):"", currency: val(m,"dCur"), council: val(m,"dCouncil"), natural: val(m,"dNat"), registrar: val(m,"dRegr"), location: val(m,"dLoc"), externalId: val(m,"dExt"),
+        description: val(m,"dDesc"), info: val(m,"dInfo"), parcelIds: checked(m,"dP"), archived: m.querySelector("#dArch").checked });
+      if(!o.council){ const p0 = docParcels(o)[0]; if(p0) o.council = p0.council || ""; }
+      return !!(await save("leases", o));
+    }
+  });
+  const calc = () => { const tmp = { subtype: val(m,"dSub"), rentPercent: val(m,"dPct"), pricePerYear: val(m,"dYear"), ngo: val(m,"dNgo"), area: val(m,"dArea"), share: val(m,"dShare") || 100, parcelIds: checked(m,"dP") };
+    m.querySelector("#dCalc").textContent = `Ділянок: ${tmp.parcelIds.length} · площа ${fmt(docArea(tmp),4)} га · НГО ${fmt0(docNgo(tmp))} грн · орендна плата за рік ≈ ${fmt(docYearPrice(tmp))} грн.`; };
+  m.addEventListener("input", calc); m.addEventListener("change", calc); calc();
+  m.querySelector("#dPQ").addEventListener("input", e => { const q = e.target.value.toLowerCase(); m.querySelectorAll("#dPList label").forEach(x => x.style.display = !q || x.dataset.q.includes(q) ? "" : "none"); });
+  if(!isNew){
+    m.querySelector("#dCopy").onclick = () => { closeModal(); const c = Object.assign({}, l); delete c.id; delete c.createdAt; c.number = (l.number || "") + " (копія)"; docDialog(null, c); };
+    m.querySelector("#dPay").onclick = () => { closeModal(); paymentDialog(null, { docId: l.id, ownerId: l.ownerId }); };
+  }
+}
+function ownerDialog(o){
+  const isNew = !o; o = o || { kind: "Фізична особа" };
+  openModal({ title: isNew ? "Новий контрагент" : o.name, wide: true,
+    body: `<div class="f">
+      <label class="full">ПІБ / назва<input id="oName" value="${esc(o.name||"")}"></label>
+      <label>Тип<select id="oKind">${optsFrom(CP_KINDS, o.kind)}</select></label>
+      <label>Ідентифікаційний код (РНОКПП / ЄДРПОУ)<input id="oCode" value="${esc(o.code||"")}"></label>
+      <label>Телефон<input id="oPhone" value="${esc(o.phone||"")}"></label>
+      <label>Email<input id="oMail" value="${esc(o.email||"")}"></label>
+      <label class="full">Адреса<input id="oAddr" value="${esc(o.address||"")}"></label>
+      <label><span><input type="checkbox" id="oOwn" ${o.isOwn?"checked":""}> Наша юрособа (агент / орендар)</span></label>
+      <label><span><input type="checkbox" id="oDead" ${o.deceased?"checked":""}> Помер (оформлення спадщини)</span></label>
+      <label class="full">Спадкоємці / представник<input id="oHeir" value="${esc(o.heirs||"")}"></label>
+    </div>
+    <h4 style="margin:4px 0 0">Банківські дані</h4>
+    <div class="f">
+      <label>Банк<input id="oBank" value="${esc(o.bankName||"")}"></label>
+      <label>МФО<input id="oMfo" value="${esc(o.mfo||"")}"></label>
+      <label class="full">IBAN<input id="oIban" value="${esc(o.iban||"")}" placeholder="UA00 0000 0000 0000 0000 0000 0000 0"></label>
+      <label class="full">Примітка<textarea id="oNote">${esc(o.note||"")}</textarea></label>
+    </div>`,
+    onDelete: isNew ? null : async () => remove("owners", o.id),
+    onSave: async (m) => { const name = val(m,"oName"); if(!name){ m.querySelector("#oName").focus(); return false; }
+      const iban = val(m,"oIban").replace(/\s+/g, "").toUpperCase();
+      if(iban && !/^UA\d{27}$/.test(iban)){ toast("IBAN має формат UA + 27 цифр"); return false; }
+      return !!(await save("owners", Object.assign({}, o, { name, kind: val(m,"oKind"), code: val(m,"oCode"), phone: val(m,"oPhone"), email: val(m,"oMail"), address: val(m,"oAddr"), isOwn: m.querySelector("#oOwn").checked, deceased: m.querySelector("#oDead").checked, heirs: val(m,"oHeir"), bankName: val(m,"oBank"), mfo: val(m,"oMfo"), iban, note: val(m,"oNote") }))); }
+  });
+}
+function paymentDialog(x, preset){
+  const isNew = !x; x = x || Object.assign({ date: today(), year: state.rentYear, kind: "Грошова" }, preset || {});
+  const docs = S.leases.filter(l => RENT_DOC_TYPES.includes(l.type) && (!l.archived || l.id === x.docId)).sort((a,b) => (cpName(a.ownerId)||"").localeCompare(cpName(b.ownerId)||"","uk"));
+  const m = openModal({ title: isNew ? "Виплата орендної плати" : "Виплата", wide: true,
+    body: `<div class="f">
+      <label class="full">Документ (договір)<select id="yDoc">${opt("", "— оберіть —", x.docId)}${docs.map(l => opt(l.id, `${cpName(l.ownerId)||"?"} · №${l.number||""} · ${fmt(docArea(l),2)} га`, x.docId)).join("")}</select></label>
+      <label>За рік<input id="yYear" inputmode="numeric" value="${esc(x.year)}"></label>
+      <label>Дата виплати<input id="yDate" type="date" value="${esc(x.date||"")}"></label>
+      <label>Вид<select id="yKind">${optsFrom(["Грошова","Натуральна","Змішана","Послуги"], x.kind)}</select></label>
+      <label>Нараховано (брутто), грн<input id="yGross" inputmode="decimal" value="${esc(x.gross??"")}"></label>
+      <label>Утримано податків, грн<input id="yTax" inputmode="decimal" value="${esc(x.tax??"")}"></label>
+      <label>Виплачено на руки, грн<input id="yNet" inputmode="decimal" value="${esc(x.net??"")}"></label>
+      <label class="full">Натуральна частина<input id="yNat" value="${esc(x.natural||"")}" placeholder="напр. пшениця 500 кг"></label>
+      <label class="full">Примітка<textarea id="yNote">${esc(x.note||"")}</textarea></label>
+    </div><div class="note" id="yHint"></div>`,
+    extra: `<button class="btn" type="button" id="yFill">Заповнити залишок за рік</button>`,
+    onDelete: isNew ? null : async () => remove("payments", x.id),
+    onSave: async (m) => { const docId = val(m,"yDoc"); if(!docId){ m.querySelector("#yDoc").focus(); return false; } const l = byId("leases", docId);
+      return !!(await save("payments", Object.assign({}, x, { docId, ownerId: l ? l.ownerId : "", year: Number(val(m,"yYear")) || state.rentYear, date: val(m,"yDate"), kind: val(m,"yKind"), gross: num(val(m,"yGross")), tax: num(val(m,"yTax")), net: num(val(m,"yNet")), natural: val(m,"yNat"), note: val(m,"yNote") }))); }
+  });
+  const hint = () => { const l = byId("leases", val(m,"yDoc")); if(!l){ m.querySelector("#yHint").textContent = ""; return; } const y = Number(val(m,"yYear")) || state.rentYear; const r = rentRows(y).find(r => r.l.id === l.id);
+    m.querySelector("#yHint").textContent = r ? `За ${y}: нараховано ${fmt(r.acc)} грн, податки ${fmt(r.tax)} (${fmt(taxRateFor(l),1)}%), виплачено ${fmt(r.paidGross)}, залишок ${fmt(r.debt)} грн.` : `За ${y} нарахувань немає.`; return r; };
+  m.addEventListener("change", hint); hint();
+  m.querySelector("#yFill").onclick = () => { const r = hint(); const l = byId("leases", val(m,"yDoc")); if(!r || !l) return; const gross = Math.max(0, r.debt + (isNew ? 0 : num(x.gross))); const tax = gross * taxRateFor(l) / 100;
+    m.querySelector("#yGross").value = gross.toFixed(2); m.querySelector("#yTax").value = tax.toFixed(2); m.querySelector("#yNet").value = (gross - tax).toFixed(2); };
+  m.querySelector("#yGross").addEventListener("input", () => { const l = byId("leases", val(m,"yDoc")); if(!l) return; const g = num(val(m,"yGross")); const t = g * taxRateFor(l) / 100; m.querySelector("#yTax").value = t.toFixed(2); m.querySelector("#yNet").value = (g - t).toFixed(2); });
+}
+function landSettingsDialog(){
+  const s = landSettings(); const cur = S.settings.find(x => x.id === "land") || { id: "land" };
+  openModal({ title: "Налаштування земельного банку",
+    body: `<div class="f"><label>ПДФО, %<input id="sP" inputmode="decimal" value="${esc(s.pdfo)}"></label><label>Військовий збір, %<input id="sV" inputmode="decimal" value="${esc(s.vz)}"></label><label>Попереджати про закінчення договору за, днів<input id="sD" inputmode="numeric" value="${esc(s.renewSoonDays)}"></label></div>
+    <p class="note">Ставки утримуються з орендної плати фізичним особам. Перевіряйте актуальні ставки за податковим законодавством.</p>`,
+    onSave: async (m) => !!(await save("settings", Object.assign({}, cur, { id: "land", pdfo: num(val(m,"sP")), vz: num(val(m,"sV")), renewSoonDays: Number(val(m,"sD")) || 180 })))
+  });
+}
+
+/* import from Excel / CSV (Cropwise export format supported) */
+let xlsxLoading = null;
+function ensureXlsx(){ if(window.XLSX) return Promise.resolve(); return xlsxLoading ||= loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"); }
+function normDate(v){
+  if(v == null || v === "") return "";
+  if(v instanceof Date && !isNaN(v)) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/); if(m) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return m[0];
+  const months = {"січня":1,"лютого":2,"березня":3,"квітня":4,"травня":5,"червня":6,"липня":7,"серпня":8,"вересня":9,"жовтня":10,"листопада":11,"грудня":12};
+  m = s.toLowerCase().match(/^(\d{1,2})\s+([а-яіїєґ']+)\s+(\d{4})/); if(m && months[m[2]]) return `${m[3]}-${String(months[m[2]]).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  return "";
+}
+const numCell = v => num(String(v ?? "").replace(/\s| /g, "").replace(/UAH|грн/gi, ""));
+function pick(row, ...keys){
+  const ks = Object.keys(row).map(k => [k, k.toLowerCase().replace(/[,.:]+$/, "").trim()]);
+  const tests = [(kl, x) => kl === x, (kl, x) => kl.startsWith(x + " ") || kl.startsWith(x + ","), (kl, x) => x.length > 3 && kl.includes(x)];
+  for(const t of tests) for(const x of keys) for(const [k, kl] of ks){ if(t(kl, x)){ const v = row[k]; if(v !== "" && v != null) return v; } }
+  return "";
+}
+async function readTable(file){
+  if(/\.xlsx?$/i.test(file.name)){
+    await ensureXlsx();
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "", raw: true });
+  }
+  const text = (await file.text()).replace(/^﻿/, "");
+  const delim = (text.split("\n")[0].match(/;/g) || []).length >= (text.split("\n")[0].match(/,/g) || []).length ? ";" : ",";
+  const rows = []; let cur = [""], q = false; const lines = [];
+  for(let i = 0; i < text.length; i++){ const c = text[i];
+    if(q){ if(c === '"' && text[i+1] === '"'){ cur[cur.length-1] += '"'; i++; } else if(c === '"') q = false; else cur[cur.length-1] += c; }
+    else if(c === '"') q = true; else if(c === delim) cur.push(""); else if(c === "\n"){ lines.push(cur); cur = [""]; } else if(c !== "\r") cur[cur.length-1] += c; }
+  if(cur.length > 1 || cur[0]) lines.push(cur);
+  const head = lines.shift() || [];
+  lines.forEach(l => { if(l.every(x => !x.trim())) return; const o = {}; head.forEach((h, i) => o[h.trim()] = (l[i] ?? "").trim()); rows.push(o); });
+  return rows;
+}
+async function findOrCreateOwner(name, code, cache){
+  name = String(name || "").trim(); code = String(code || "").trim(); if(!name && !code) return "";
+  const key = (code || name).toLowerCase(); if(cache[key]) return cache[key];
+  let o = S.owners.find(x => (code && x.code === code) || (!code && x.name.toLowerCase() === name.toLowerCase()));
+  if(!o){ const id = await save("owners", { name: name || code, code, kind: /тов|пп|фг|ат|прат|сфг|кооператив|"|«/i.test(name) ? "Юридична особа" : "Фізична особа" }); cache[key] = id; return id; }
+  cache[key] = o.id; return o.id;
+}
+function landImportDialog(){
+  openModal({ title: "Імпорт земельного банку з Excel / CSV", saveLabel: "Імпортувати", wide: true,
+    body: `<p class="note">Перший рядок — назви колонок. Підходять вивантаження з Cropwise («Земельні ділянки», «Земельні документи») або власні таблиці з колонками на кшталт: «Кадастровий номер», «Кадастрова площа», «Сільська рада», «Власник», «ІПН», «Номер договору», «Від», «До», «НГО», «Ставка %», «Ціна за рік».</p>
+    <div class="f"><label>Що імпортуємо<select id="iKind">${opt("parcels","Земельні ділянки (з власниками)")}${opt("docs","Земельні документи / договори (створює й ділянки)")}${opt("owners","Контрагенти")}</select></label>
+    <label class="full">Файл (.xlsx, .xls, .csv)<input type="file" id="iFile" accept=".xlsx,.xls,.csv,text/csv"></label>
+    <label>Група полів для нових ділянок<input id="iGroup" list="groupList" placeholder="необов’язково"></label>
+    <label>Наша юрособа (агент) для договорів<select id="iAgent">${cpOptions((S.owners.find(o=>o.isOwn)||{}).id)}</select></label></div>${groupDatalist()}
+    <div class="note" id="iInfo"></div>`,
+    onSave: async (m) => {
+      const file = m.querySelector("#iFile").files[0]; const info = m.querySelector("#iInfo");
+      if(!file){ info.textContent = "Оберіть файл."; return false; }
+      let rows; try { info.textContent = "Читаю файл…"; rows = await readTable(file); } catch(e){ info.textContent = "Не вдалося прочитати файл: " + e.message; return false; }
+      if(!rows.length){ info.textContent = "У файлі немає рядків."; return false; }
+      const kind = val(m,"iKind"), group = val(m,"iGroup"), agentId = val(m,"iAgent"); const cache = {};
+      let np = 0, up = 0, nd = 0, no = 0, skip = 0, i = 0;
+      const cadOf = r => { const v = String(pick(r, "кадастров", "ділянк", "cadastr") || ""); const mm = v.match(/\d{10}:\d{2}:\d{3}:\d{4}/g); return mm || []; };
+      for(const r of rows){
+        i++; if(i % 10 === 0) info.textContent = `Обробка ${i} з ${rows.length}…`;
+        if(kind === "owners"){
+          const name = pick(r, "піб", "назва", "контрагент", "ім"); if(!name){ skip++; continue; }
+          const code = String(pick(r, "іпн", "рнокпп", "єдрпоу", "ідентифікаційний код", "код")).trim();
+          const ex = S.owners.find(x => (code && x.code === code) || x.name.toLowerCase() === String(name).toLowerCase());
+          const iban = String(pick(r, "iban", "рахунок")).replace(/\s+/g, "").toUpperCase();
+          await save("owners", Object.assign({}, ex || { kind: "Фізична особа" }, { name: String(name).trim(), code, phone: String(pick(r, "телефон") || (ex||{}).phone || ""), address: String(pick(r, "адрес") || (ex||{}).address || ""), bankName: String(pick(r, "банк") || (ex||{}).bankName || ""), mfo: String(pick(r, "мфо") || (ex||{}).mfo || ""), iban: iban || (ex||{}).iban || "" }));
+          ex ? up++ : no++; continue;
+        }
+        const cads = cadOf(r); if(!cads.length){ skip++; continue; }
+        const ownerId = await findOrCreateOwner(pick(r, "власник земельної", "власник", "контрагент", "орендодавець", "пайовик"), pick(r, "ідентифікаційний код", "іпн", "рнокпп", "єдрпоу"), cache);
+        const pids = [];
+        for(const cad of cads){
+          let p = S.parcels.find(x => x.cadastre === cad);
+          const pdata = { cadastre: cad };
+          if(kind === "parcels" || cads.length === 1){
+            const a = numCell(pick(r, "кадастрова площа", "площа")); if(a) pdata.area = a;
+            const ua = numCell(pick(r, "використовувана площа")); if(ua) pdata.usedArea = ua;
+            const ngo = numCell(pick(r, "кадастрова вартість", "нормативна грошова", "нго")); if(ngo && kind === "parcels") pdata.ngo = ngo;
+            const fields = { purpose: pick(r, "цільове призначення"), landType: pick(r, "тип землі"), ownership: pick(r, "форма власності"), category: pick(r, "категорія земель"), council: pick(r, "сільська рада", "рада", "громада"), district: pick(r, "район"), region: pick(r, "область"), address: pick(r, "адреса"), onm: pick(r, "онм"), regNumber: kind === "parcels" ? pick(r, "номер реєстрації") : "", encumbrance: pick(r, "обтяження"), description: kind === "parcels" ? pick(r, "опис") : "", externalId: kind === "parcels" ? pick(r, "зовнішній") : "" };
+            for(const k in fields){ const v = String(fields[k] ?? "").trim(); if(v) pdata[k] = v; }
+            if(pdata.purpose && !PURPOSES.includes(pdata.purpose)){ const code = pdata.purpose.match(/^\d{2}\.\d{2}/); const f = code && PURPOSES.find(x => x.startsWith(code[0])); if(f) pdata.purpose = f; }
+            if(kind === "parcels" && ownerId) pdata.ownerId = ownerId;
+          }
+          if(p){ const id = await save("parcels", Object.assign({}, p, pdata)); if(id) pids.push(id); up++; }
+          else { const id = await save("parcels", Object.assign({ group, fieldIds: [], ownerId: kind === "parcels" ? ownerId : "" }, pdata)); if(id) pids.push(id); np++; }
+        }
+        if(kind === "docs"){
+          const number = String(pick(r, "номер документа", "номер договору", "№") || "").trim().replace(/^#/, "");
+          const type = String(pick(r, "тип документу") || "Взята в оренду").trim();
+          const ngo = numCell(pick(r, "нормативна грошова", "нго")); const yearPrice = numCell(pick(r, "ціна за рік", "орендна плата")); let pct = numCell(pick(r, "ставка", "відсоток", "% до нго"));
+          if(!pct && ngo && yearPrice) pct = +(yearPrice / ngo * 100).toFixed(2);
+          const ex = S.leases.find(l => number && l.number === number && (l.parcelIds||[]).some(id => pids.includes(id)));
+          const d = Object.assign({}, ex || { share: 100, currency: "UAH" }, { number, type: DOC_TYPES.includes(type) ? type : "Взята в оренду", subtype: String(pick(r, "підтип") || (pct ? "Фіксований в % до НГО" : "Фіксована сума")).trim(),
+            status: String(pick(r, "статус документа", "статус") || "зареєстрований").trim().toLowerCase(), regDate: normDate(pick(r, "дата реєстрації")), dateFrom: normDate(pick(r, "від", "дата початку", "початок")), dateTo: normDate(pick(r, "до", "дата закінчення", "закінчення")),
+            area: numCell(pick(r, "площа")) || "", ngo: ngo || "", ngoYear: String(pick(r, "рік нго") || ""), rentPercent: pct || "", pricePerYear: yearPrice || "", ownerId, agentId: (ex && ex.agentId) || agentId,
+            council: String(pick(r, "сільська рада", "рада") || ""), registrar: String(pick(r, "реєстратор") || ""), description: String(pick(r, "опис") || ""), externalId: String(pick(r, "зовнішній") || ""), archived: /^так$/i.test(String(pick(r, "в архіві"))),
+            parcelIds: [...new Set([...((ex||{}).parcelIds || []), ...pids])] });
+          if(DSTATE && !DOC_STATUSES.includes(d.status)) d.status = "зареєстрований";
+          await save("leases", d); nd++;
+        }
+      }
+      toast(`Імпорт завершено: нових ділянок ${np}, оновлено ${up}, документів ${nd}${no?`, контрагентів ${no}`:""}${skip?`, пропущено рядків ${skip}`:""}`);
+    }
+  });
+}
+function parcelGeoImportDialog(){
+  openModal({ title: "Імпорт контурів земельних ділянок", saveLabel: "Імпортувати",
+    body: `<p class="note">Файл KML або GeoJSON. Ділянку шукаю за кадастровим номером у назві або властивостях об’єкта. Якщо ділянки ще немає — створю її з площею за контуром.</p>
+    <div class="f"><label class="full">Файл<input type="file" id="gpFile" accept=".kml,.geojson,.json"></label><label>Група полів для нових<input id="gpGroup" list="groupList"></label></div>${groupDatalist()}<div class="note" id="gpInfo"></div>`,
+    onSave: async (m) => {
+      const file = m.querySelector("#gpFile").files[0]; const info = m.querySelector("#gpInfo");
+      if(!file){ info.textContent = "Оберіть файл."; return false; }
+      let items; try { items = parseGeo(await file.text(), file.name); } catch(e){ info.textContent = "Не вдалося прочитати: " + e.message; return false; }
+      let n = 0, u = 0, s = 0;
+      for(const it of items){
+        const txt = [it.name, ...Object.values(it.props || {})].join(" "); const cad = (txt.match(/\d{10}:\d{2}:\d{3}:\d{4}/) || [])[0];
+        if(!cad){ s++; continue; }
+        const ca = +contourArea(it.rings).toFixed(4); const p = S.parcels.find(x => x.cadastre === cad);
+        if(p){ await save("parcels", Object.assign({}, p, { contours: it.rings, calcArea: ca, area: num(p.area) || ca })); u++; }
+        else { await save("parcels", { cadastre: cad, contours: it.rings, calcArea: ca, area: ca, group: val(m,"gpGroup"), fieldIds: [] }); n++; }
+      }
+      state.mapVB = {}; if(MAPS.land) MAPS.land.fitted = false;
+      toast(`Контури: оновлено ${u}, нових ділянок ${n}${s?`, без кадастрового номера ${s}`:""}`);
+    }
+  });
+}
+
+function landAction(a, d){
+  const csvDate = s => s || "";
+  if(a === "newParcel"){ parcelDialog(null); return true; }
+  if(a === "newDoc"){ docDialog(null); return true; }
+  if(a === "newOwner"){ ownerDialog(null); return true; }
+  if(a === "newPayment"){ paymentDialog(null); return true; }
+  if(a === "landSettings"){ landSettingsDialog(); return true; }
+  if(a === "landImport"){ landImportDialog(); return true; }
+  if(a === "parcelGeoImport"){ parcelGeoImportDialog(); return true; }
+  if(a === "linkParcels"){ linkParcelsByIntersection(); return true; }
+  if(a === "csvParcels"){ exportCsv("Земельні ділянки", ["Група полів","Кадастровий номер","Номер реєстрації","В архіві","Кадастрова площа, га","Розрахункова площа, га","Використовувана площа, га","Кадастрова вартість","Рік НГО","Цільове призначення","Тип землі","Форма власності","Категорія земель","Сільська рада","Адреса","Район","Область","Опис","Додаткова інформація","Запланована дія","Статус за документами","Поля","Дата закінчення права","Власник земельної ділянки","Код власника","Номер ОНМ","Обтяження земельної ділянки","Зовнішній ідентифікатор"],
+    landFilteredParcels().map(p => { const o = byId("owners", p.ownerId) || {}; return [p.group, p.cadastre, p.regNumber, p.archived?"Так":"Ні", num(p.area), p.calcArea, p.usedArea, p.ngo, p.ngoYear, p.purpose, p.landType, p.ownership, p.category, p.council, p.address, p.district, p.region, p.description, p.info, p.plannedAction, parcelStatus(p), (p.fieldIds||[]).map(id=>nameOf("fields",id)).join(", "), csvDate(parcelRightEnd(p)), o.name, o.code, p.onm, p.encumbrance, p.externalId]; })); return true; }
+  if(a === "csvDocs"){ exportCsv("Земельні документи", ["Номер документа","Версія договору","В архіві","Дата реєстрації","Тип документу","Підтип документу","Статус документа","Тип права володіння землею","Частка землі, %","Від","До","Фактична дата завершення","Автоматичне подовження","Площа, га","Розрахункова площа, га","Нормативна грошова оцінка","Рік НГО","Ставка, %","Ціна за рік","Планова ціна за рік","Ціна","Планова ціна","Валюта","Ділянки","Сільська рада","Агент","Контрагент","Ідентифікаційний код","Реєстратор","Місце находження документа","Опис","Додаткова інформація","Зовнішній ідентифікатор"],
+    S.leases.map(l => { const o = byId("owners", l.ownerId) || {}; return [l.number, l.version, l.archived?"Так":"Ні", l.regDate, l.type, l.subtype, l.status, l.rightType, l.share, l.dateFrom, l.dateTo, l.factEnd, l.autoRenew?"Так":"Ні", docArea(l), docCalcArea(l), docNgo(l), l.ngoYear, l.rentPercent, docYearPrice(l), l.plannedPerYear, l.price, l.plannedPrice, l.currency, docParcels(l).map(p=>p.cadastre).join(", "), l.council, cpName(l.agentId), o.name, o.code, l.registrar, l.location, l.description, l.info, l.externalId]; })); return true; }
+  if(a === "csvOwners" || a === "csvOwnersBank"){ const bank = a === "csvOwnersBank"; exportCsv(bank ? "Контрагенти з банківськими даними" : "Контрагенти", ["Контрагент","Тип","Ідентифікаційний код","Телефон","Email","Адреса","Наша юрособа", ...(bank ? ["Банк","МФО","IBAN"] : [])],
+    sorted("owners").map(o => [o.name, o.kind, o.code, o.phone, o.email, o.address, o.isOwn?"Так":"Ні", ...(bank ? [o.bankName, o.mfo, o.iban] : [])])); return true; }
+  if(a === "csvRent"){ const y = state.rentYear; exportCsv("Орендна плата " + y, ["Контрагент","Ідентифікаційний код","Документ","Від","До","Площа, га","НГО, грн","Ставка","Нараховано, грн","Податки, грн","До виплати, грн","Виплачено (брутто), грн","Залишок, грн","IBAN"],
+    rentRows(y).map(r => { const o = byId("owners", r.l.ownerId) || {}; return [o.name, o.code, r.l.number, r.l.dateFrom, docEnd(r.l), +docArea(r.l).toFixed(4), +docNgo(r.l).toFixed(2), r.l.rentPercent ? r.l.rentPercent + "%" : r.l.subtype, +r.acc.toFixed(2), +r.tax.toFixed(2), +r.payable.toFixed(2), +r.paidGross.toFixed(2), +r.debt.toFixed(2), o.iban]; })); return true; }
+  if(a === "csvAnalysis" && landAnalysisCache){ exportCsv("Аналіз земельних ресурсів", ["Поле","Група","Площа поля, га","З документами, га","Без документів, га","Поза ділянками, га","Ділянки"], landAnalysisCache.rows.map(r => [r.f.name, r.f.group, +r.field.toFixed(4), +r.act.toFixed(4), +r.noDoc.toFixed(4), +r.uncovered.toFixed(4), r.parcels.map(x => x.p.cadastre + " (" + x.a.toFixed(4) + ")").join(", ")])); return true; }
+  return false;
+}
+
+async function makeLandDemo(F){
+  const D = { demo: true };
+  const own = await save("owners", Object.assign({ name: "ТОВ «Приклад Агро»", kind: "Юридична особа", code: "00000000", isOwn: true }, D));
+  const names = [["Іваненко Марія Петрівна","1111111111"],["Петренко Василь Іванович","2222222222"],["Сидоренко Ганна Олексіївна","3333333333"]];
+  const O = []; for(const [name, code] of names) O.push(await save("owners", Object.assign({ name, code, kind: "Фізична особа", phone: "+380 00 000 00 00", bankName: "Банк (приклад)" }, D)));
+  const P = []; let k = 0;
+  for(const fid of F.slice(0, 2)){
+    const f = byId("fields", fid); if(!f || !f.contours) continue;
+    const r = f.contours[0]; const x0 = Math.min(...r.map(p=>p[0])), x1 = Math.max(...r.map(p=>p[0])), y0 = Math.min(...r.map(p=>p[1])), y1 = Math.max(...r.map(p=>p[1]));
+    const xm = (x0 + x1) / 2;
+    for(const [a, b] of [[x0, xm], [xm, x1 - (x1 - x0) * 0.08]]){
+      const ring = [[a,y0],[b,y0],[b,y1],[a,y1],[a,y0]]; const ca = +contourArea([ring]).toFixed(4); k++;
+      P.push(await save("parcels", Object.assign({ cadastre: `35215813${String(k).padStart(2,"0")}:02:000:0${String(100+k)}`, group: f.group, area: ca, calcArea: ca, contours: [ring], ngo: Math.round(ca * 32000), ngoYear: "2025", purpose: PURPOSES[0], landType: "Рілля", ownership: "Приватна", category: LAND_CATEGORIES[0], council: "Голованівська селищна рада", region: "Кіровоградська", district: "Голованівський", ownerId: O[(k-1) % 3], fieldIds: [fid] }, D)));
+    }
+  }
+  const y = new Date().getFullYear();
+  const mk = (i, pi, from, to, pct) => save("leases", Object.assign({ number: "ПР-" + i, type: "Взята в оренду", subtype: "Фіксований в % до НГО", status: "зареєстрований", rightType: "Оренда", share: 100, regDate: from, dateFrom: from, dateTo: to, rentPercent: pct, ownerId: O[(i-1) % 3], agentId: own, parcelIds: pi.filter(Boolean), council: "Голованівська селищна рада", currency: "UAH" }, D));
+  const L1 = await mk(1, [P[0]], (y-3) + "-01-01", (y+7) + "-12-31", 12);
+  await mk(2, [P[1]], (y-5) + "-03-01", today().slice(0,4) + "-12-31", 10);
+  await mk(3, [P[2]], (y-10) + "-01-01", (y-1) + "-12-31", 8);
+  const l1 = byId("leases", L1); if(l1){ const g = Math.round(rentForYear(l1, y) / 2); const t = g * 0.23; await save("payments", Object.assign({ docId: L1, ownerId: l1.ownerId, year: y, date: today(), kind: "Грошова", gross: g, tax: +t.toFixed(2), net: +(g - t).toFixed(2) }, D)); }
+}
+
 /* ---------- demo data ---------- */
 async function makeDemo(){
   const D = { demo: true };
@@ -1085,6 +1718,7 @@ async function makeDemo(){
   await save("tasks", { date: today(), start:"08:00", end:"16:00", machineId:M.m3, driverId:P.p2, work:"Перевезення зерна на елеватор", kmRoad: 220, fuel: 70, demo:true });
   await save("service", { machineId:M.m1, kind:"ТО-2", status:"planned", date: today(), demo:true });
   await save("service", { machineId:M.m2, kind:"Заміна мастила в двигуні", status:"done", date: today(), cost: 4200, demo:true });
+  await makeLandDemo(F);
   state.mapVB = {};
   toast("Приклад створено");
 }
@@ -1096,7 +1730,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
+const VIEWS = { land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -1115,7 +1749,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -1133,6 +1767,7 @@ main.addEventListener("click", e => {
     if(a==="backMach"){ state.machineId = null; return render(); }
     if(a==="newTask") return taskDialog(null, d.machine ? { machineId: d.machine } : {});
     if(a==="newService") return serviceDialog(null, d.machine ? { machineId: d.machine } : {});
+    if(landAction(a, d)) return;
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -1148,6 +1783,12 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.fieldOpen){ state.fieldSel = d.fieldOpen; location.hash = "fields"; return; }
+  if(d.landtab){ state.landTab = d.landtab; return render(); }
+  if(d.parcel) return parcelDialog(byId("parcels", d.parcel));
+  if(d.lease) return leaseDialog(byId("leases", d.lease));
+  if(d.owner) return ownerDialog(byId("owners", d.owner));
+  if(d.pay) return paymentDialog(byId("payments", d.pay));
   if(d.field){ state.fieldSel = d.field; return render(); }
   if(d.op) return opDialog(byId("ops", d.op));
   if(d.machine){ state.machineId = d.machine; return render(); }
@@ -1163,11 +1804,15 @@ main.addEventListener("input", e => {
   if(id==="fq"){ state.fieldQ = e.target.value; render(); }
   if(id==="oq"){ state.ops.q = e.target.value; render(); }
   if(id==="mq"){ state.machQ = e.target.value; render(); }
+  if(id==="lq"){ state.landQ = e.target.value; render(); }
 });
 main.addEventListener("change", e => {
   const id = e.target.id;
   if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
   if(id==="og"){ state.ops.group = e.target.value; render(); }
+  if(id==="lc"){ state.landCouncil = e.target.value; render(); }
+  if(id==="ls"){ state.landStatus = e.target.value; render(); }
+  if(id==="ry"){ state.rentYear = Number(e.target.value) || state.rentYear; render(); }
   if(id==="os"){ state.ops.status = e.target.value; render(); }
   if(id==="pFrom" && e.target.value){ state.period.from = e.target.value; render(); }
   if(id==="pTo" && e.target.value){ state.period.to = e.target.value; render(); }
