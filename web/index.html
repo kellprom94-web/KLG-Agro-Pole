@@ -187,10 +187,12 @@ tr:last-child td{border-bottom:0}
     <a href="#land" data-v="land">Земельний банк</a>
     <a href="#wms" data-v="wms">Склад</a>
     <a href="#refs" data-v="refs">Довідники</a>
+    <a href="#users" data-v="users" id="usersLink" hidden>Користувачі</a>
     <a href="#reports" data-v="reports">Звіти</a>
     <div class="season">
       <label for="seasonSel">Сезон</label>
       <select id="seasonSel"></select>
+      <div id="meBox" style="display:grid;gap:4px;margin-top:6px"></div>
       <button class="btn sm" type="button" id="logoutBtn" style="background:transparent;color:var(--rail-ink);border-color:#33433a;margin-top:6px">Вийти</button>
     </div>
   </nav>
@@ -282,6 +284,7 @@ let lastSync = "", pollTimer = null, authed = false;
 async function api(path, opts = {}){
   const r = await fetch("/api" + path, Object.assign({ headers: { "content-type": "application/json" }, credentials: "same-origin" }, opts));
   if(r.status === 401){ authed = false; showLogin(); throw { code: "auth" }; }
+  if(r.status === 403){ toast("У вашої ролі немає прав змінювати цей розділ"); throw { code: "forbidden" }; }
   if(r.status === 503){ dbState = "nopass"; render(); throw { code: "nopass" }; }
   if(!r.ok) throw { code: "http", message: r.status + " " + (await r.text()).slice(0, 200) };
   return r.json();
@@ -298,7 +301,7 @@ async function initDb(){
   try {
     const j = await api("/all");
     COLS.forEach(c => S[c] = []);
-    applyDocs(j.docs); lastSync = j.now; authed = true; dbState = "ready";
+    applyDocs(j.docs); lastSync = j.now; authed = true; dbState = "ready"; loadMe();
     render(); startPoll();
   } catch(e){ if(e.code === "http"){ dbState = "error"; render(); } }
 }
@@ -315,6 +318,7 @@ function clean(o){ const r = {}; for(const k in o){ if(k==="id") continue; const
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 async function save(col, obj){
   if(!authed){ showLogin(); return null; }
+  if(!canWriteCol(col)){ toast("У вашої ролі немає прав змінювати цей розділ"); return null; }
   const id = obj.id || newId();
   const now = new Date().toISOString();
   const data = clean(obj); data.updatedAt = now; if(!obj.id) data.createdAt = now;
@@ -331,12 +335,12 @@ async function remove(col, id){
 function showLogin(){
   if(document.getElementById("login")) return;
   const w = document.createElement("div"); w.id = "login"; w.className = "overlay"; w.style.zIndex = 40;
-  w.innerHTML = `<form class="modal" style="width:min(380px,100%)"><header><h3>Вхід у КЛГ Агро Поле</h3></header><div class="body"><div class="f"><label class="full">Пароль<input type="password" id="lpw" autocomplete="current-password" required></label></div><div class="note" id="lerr"></div></div><footer><span class="sp"></span><button class="btn pri" type="submit">Увійти</button></footer></form>`;
+  w.innerHTML = `<form class="modal" style="width:min(380px,100%)"><header><h3>Вхід у КЛГ Агро Поле</h3></header><div class="body"><div class="f"><label class="full">Логін<input id="llg" autocomplete="username" value="${esc(lsGet("login") || "admin")}"></label><label class="full">Пароль<input type="password" id="lpw" autocomplete="current-password" required></label></div><div class="note" id="lerr"></div></div><footer><span class="sp"></span><button class="btn pri" type="submit">Увійти</button></footer></form>`;
   document.body.appendChild(w);
   w.querySelector("form").onsubmit = async e => {
     e.preventDefault();
-    const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: w.querySelector("#lpw").value }) });
-    if(r.ok){ w.remove(); initDb(); } else w.querySelector("#lerr").textContent = r.status === 503 ? "Пароль програми ще не задано в Cloudflare." : "Невірний пароль.";
+    const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ login: w.querySelector("#llg").value, password: w.querySelector("#lpw").value }) }); lsSet("login", w.querySelector("#llg").value);
+    if(r.ok){ w.remove(); initDb(); } else w.querySelector("#lerr").textContent = r.status === 503 ? "Пароль програми ще не задано в Cloudflare." : "Невірний логін або пароль.";
   };
   w.querySelector("#lpw").focus();
 }
@@ -603,6 +607,7 @@ function importDialog(){
 /* ---------- views ---------- */
 function header(title, actions=""){ return `<div class="top"><button class="btn menu-btn" type="button" id="menuBtn" aria-label="Меню">☰</button><h1>${esc(title)}</h1><span class="sp"></span>${actions}</div>`; }
 function statusBanner(){
+  const rb = roleBanner(); if(rb && dbState === "ready") return rb;
   if(dbState === "loading") return `<div class="banner">Завантаження даних…</div>`;
   if(dbState === "nopass") return `<div class="banner err">У Cloudflare ще не задано пароль програми (APP_PASSWORD).</div>`;
   if(dbState === "error") return `<div class="banner err">Не вдалося під’єднатися до бази. Оновіть сторінку трохи згодом.</div>`;
@@ -2556,6 +2561,68 @@ function planAction(a, d){
   return false;
 }
 
+/* ---------- users & roles ---------- */
+let ME = null;
+const VIEW_COL = { fields: "fields", rotation: "fields", ops: "ops", plans: "agroplans", scout: "scoutreports", machines: "machines", tasks: "tasks", service: "service", fuel: "fuelings", harvest: "harvests", land: "parcels", wms: "whdocs", refs: "products" };
+function canWriteCol(col){ if(!ME) return true; return ME.write === "*" || (ME.write || []).includes(col); }
+async function loadMe(){
+  try { ME = await api("/me"); } catch(e){ ME = null; }
+  const box = document.getElementById("meBox");
+  if(box && ME) box.innerHTML = `<div style="color:#fff;font-weight:600">${esc(ME.name)}</div><div style="opacity:.7">${esc(ME.roles[ME.role] || ME.role)}</div>${ME.builtin ? "" : `<button class="btn sm" type="button" id="pwBtn" style="background:transparent;color:var(--rail-ink);border-color:#33433a">Змінити пароль</button>`}`;
+  const pw = document.getElementById("pwBtn"); if(pw) pw.onclick = passwordDialog;
+  const ul = document.getElementById("usersLink"); if(ul) ul.hidden = !(ME && ME.role === "admin");
+  render();
+}
+function roleBanner(){
+  const col = VIEW_COL[state.view];
+  if(ME && col && !canWriteCol(col)) return `<div class="banner">Ваша роль «${esc(ME.roles[ME.role] || ME.role)}»: у цьому розділі лише перегляд.</div>`;
+  return "";
+}
+function passwordDialog(){
+  openModal({ title: "Зміна пароля", saveLabel: "Змінити",
+    body: `<div class="f"><label class="full">Поточний пароль<input type="password" id="pwO" autocomplete="current-password"></label><label class="full">Новий пароль (від 8 символів)<input type="password" id="pwN" autocomplete="new-password"></label><label class="full">Повторіть новий пароль<input type="password" id="pwR" autocomplete="new-password"></label></div><div class="note" id="pwE"></div>`,
+    onSave: async (m) => { if(val(m,"pwN") !== val(m,"pwR")){ m.querySelector("#pwE").textContent = "Нові паролі не збігаються."; return false; }
+      const r = await fetch("/api/password", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ old: m.querySelector("#pwO").value, new: m.querySelector("#pwN").value }) });
+      if(!r.ok){ m.querySelector("#pwE").textContent = (await r.json().catch(() => ({}))).error || "Не вдалося змінити пароль."; return false; }
+      toast("Пароль змінено"); }
+  });
+}
+let USERS = null;
+async function loadUsers(){ try { USERS = (await api("/users")).users; } catch(e){ USERS = []; } render(); }
+function viewUsers(){
+  if(!ME || ME.role !== "admin") return header("Користувачі") + `<div class="card"><div class="empty">Розділ доступний лише адміністратору.</div></div>`;
+  if(USERS == null){ loadUsers(); return header("Користувачі") + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
+  const roleRows = Object.entries(ME.roles).map(([k, n]) => `<tr><td><b>${esc(n)}</b></td><td>${esc(ROLE_HELP[k] || "")}</td></tr>`).join("");
+  return header("Користувачі", `<button class="btn pri" type="button" data-act="newUser">+ Користувач</button>`) + `
+  <div class="tw" style="margin-bottom:16px"><table><thead><tr><th>Ім’я</th><th>Логін</th><th>Роль</th><th>Статус</th><th>Створено</th><th>Останній вхід</th></tr></thead><tbody>
+  <tr><td><b>Адміністратор</b></td><td>admin</td><td>${esc(ME.roles.admin)}</td><td><span class="pill st-done">Активний</span></td><td>—</td><td>—</td></tr>
+  ${USERS.map(u => `<tr class="click" data-user="${esc(u.id)}"><td><b>${esc(u.name)}</b></td><td>${esc(u.login)}</td><td>${esc(ME.roles[u.role] || u.role)}</td><td><span class="pill ${u.active?"st-done":"st-cancel"}">${u.active?"Активний":"Вимкнено"}</span></td><td>${fdate((u.created||"").slice(0,10))}</td><td>${u.last_login ? fdate(u.last_login.slice(0,10)) + " " + u.last_login.slice(11,16) : "—"}</td></tr>`).join("")}
+  </tbody></table></div>
+  <div class="card"><h2>Ролі та права</h2><p class="note">Переглядати можуть усі ролі. Змінювати — лише свої розділи; права перевіряє сервер. Вхід «admin» з паролем APP_PASSWORD завжди має повні права.</p><div class="tw"><table><tbody>${roleRows}</tbody></table></div></div>`;
+}
+const ROLE_HELP = {
+  admin: "Усе, включно з користувачами.",
+  agronomist: "Поля, сівозміна, агрооперації, планування, огляди, нотатки, загрози, номенклатура, запити на склад.",
+  mechanic: "Машини, обладнання, люди, завдання техніки, ТО і регламенти, норми, АЗС і видача палива, перевезення врожаю, ТТН, зерносховища, запити на склад.",
+  storekeeper: "Склади й усі складські документи, рахунки, прайс-листи, номенклатура, АЗС і видача палива.",
+  land: "Земельні ділянки, документи, контрагенти, орендна плата.",
+  accountant: "Орендні виплати, вхідні рахунки, прайс-листи, контрагенти.",
+  viewer: "Тільки перегляд усіх розділів."
+};
+function userDialog(u){
+  const isNew = !u; u = u || { role: "agronomist", active: 1 };
+  openModal({ title: isNew ? "Новий користувач" : u.name,
+    body: `<div class="f"><label class="full">Ім’я та прізвище<input id="uN" value="${esc(u.name||"")}"></label><label>Логін<input id="uL" value="${esc(u.login||"")}" autocomplete="off" placeholder="латиницею, напр. ivanenko"></label>
+      <label>Роль<select id="uR">${Object.entries(ME.roles).map(([k, n]) => opt(k, n, u.role)).join("")}</select></label>
+      <label class="full">${isNew ? "Пароль (від 8 символів)" : "Новий пароль (залиште порожнім, щоб не змінювати)"}<input type="password" id="uP" autocomplete="new-password"></label>
+      <label><span><input type="checkbox" id="uA" ${u.active?"checked":""}> Активний</span></label></div><div class="note" id="uE"></div><p class="note" id="uH">${esc(ROLE_HELP[u.role] || "")}</p>`,
+    onDelete: isNew ? null : async () => { await fetch("/api/users/" + u.id, { method: "DELETE" }); USERS = null; loadUsers(); },
+    onSave: async (m) => { const r = await fetch("/api/users", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: u.id, name: val(m,"uN"), login: val(m,"uL"), role: val(m,"uR"), active: m.querySelector("#uA").checked, password: m.querySelector("#uP").value }) });
+      if(!r.ok){ m.querySelector("#uE").textContent = (await r.json().catch(() => ({}))).error || "Не вдалося зберегти."; return false; } USERS = null; loadUsers(); toast(isNew ? "Користувача створено" : "Збережено"); }
+  });
+  const sel = document.getElementById("uR"); if(sel) sel.onchange = () => { document.getElementById("uH").textContent = ROLE_HELP[sel.value] || ""; };
+}
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2620,7 +2687,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -2640,7 +2707,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2663,6 +2730,7 @@ main.addEventListener("click", e => {
     if(techAction(a, d)) return;
     if(agroAction(a, d)) return;
     if(planAction(a, d)) return;
+    if(a === "newUser") return userDialog(null);
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -2678,6 +2746,7 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.user) return userDialog((USERS || []).find(u => u.id === d.user));
   if(d.plantab){ state.planTab = d.plantab; return render(); }
   if(d.agroplan) return agroplanDialog(byId("agroplans", d.agroplan));
   if(d.rec) return recDialog(byId("recommendations", d.rec));
@@ -2760,7 +2829,7 @@ seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("seas
 function route(){ const h = (location.hash||"").replace("#",""); state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
 window.addEventListener("hashchange", route);
 fillSeasons(); route();
-document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; COLS.forEach(c => S[c] = []); render(); showLogin(); };
+document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; ME = null; USERS = null; COLS.forEach(c => S[c] = []); const mb = document.getElementById("meBox"); if(mb) mb.innerHTML = ""; render(); showLogin(); };
 initDb();
 </script>
 </body>

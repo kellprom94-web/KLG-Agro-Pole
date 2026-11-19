@@ -4,6 +4,43 @@ const COLS = new Set(["fields", "ops", "machines", "implements", "people", "prod
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
+const ROLES = {
+  admin: { name: "Адміністратор", write: "*" },
+  agronomist: { name: "Агроном", write: ["fields", "ops", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "products", "whrequests", "settings"] },
+  mechanic: { name: "Механік / диспетчер", write: ["machines", "implements", "people", "tasks", "service", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "whrequests"] },
+  storekeeper: { name: "Комірник", write: ["warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "products", "fuelstations", "fuelings"] },
+  land: { name: "Земельник", write: ["parcels", "leases", "owners", "payments", "settings"] },
+  accountant: { name: "Бухгалтер", write: ["payments", "invoices", "pricelists", "owners", "settings"] },
+  viewer: { name: "Лише перегляд", write: [] },
+};
+const canWriteCol = (u, col) => !!u && ROLES[u.role] && (ROLES[u.role].write === "*" || ROLES[u.role].write.includes(col));
+const enc = new TextEncoder();
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+async function hmacHex(secret, msg) { const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return hex(await crypto.subtle.sign("HMAC", key, enc.encode(msg))); }
+async function hashPassword(pw, saltHex) {
+  const salt = saltHex ? new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16))) : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", enc.encode(pw), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 100000 }, key, 256);
+  return { hash: hex(bits), salt: hex(salt) };
+}
+const b64e = (o) => btoa(String.fromCharCode(...enc.encode(JSON.stringify(o)))).replace(/=+$/, "");
+const b64d = (s) => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0))));
+async function makeToken(env, uid) { const body = b64e({ u: uid, e: Date.now() + 365 * 864e5 }); return "v2." + body + "." + (await hmacHex(env.APP_PASSWORD, "v2." + body)); }
+const ADMIN = { id: "admin", name: "Адміністратор", role: "admin", builtin: true };
+async function readSession(req, env) {
+  const raw = ((req.headers.get("cookie") || "").split(/;\s*/).find((c) => c.startsWith(COOKIE + "=")) || "").slice(COOKIE.length + 1);
+  if (!raw) return null;
+  if (!raw.startsWith("v2.")) return (await safeEqual(raw, await sessionToken(env.APP_PASSWORD))) ? ADMIN : null;
+  const [, body, sig] = raw.split(".");
+  if (!body || !sig || !(await safeEqual(sig, await hmacHex(env.APP_PASSWORD, "v2." + body)))) return null;
+  let p; try { p = b64d(body); } catch (e) { return null; }
+  if (!p.e || p.e < Date.now()) return null;
+  if (p.u === "admin") return ADMIN;
+  await ensureSchema(env.DB);
+  const u = await env.DB.prepare("SELECT id, login, name, role, active FROM users WHERE id = ?").bind(p.u).first();
+  return u && u.active ? { id: u.id, login: u.login, name: u.name, role: ROLES[u.role] ? u.role : "viewer" } : null;
+}
+const cookieHeader = (v, age) => `${COOKIE}=${v}; Path=/; Max-Age=${age}; HttpOnly; Secure; SameSite=Lax`;
 
 export default {
   async fetch(req, env) {
@@ -21,26 +58,69 @@ export default {
 
 async function handleApi(req, env, url) {
   if (!env.APP_PASSWORD) return json({ error: "APP_PASSWORD is not set" }, 503);
-  const token = await sessionToken(env.APP_PASSWORD);
   const path = url.pathname;
 
   if (path === "/api/login" && req.method === "POST") {
     const body = await req.json().catch(() => ({}));
-    if (!body.password || !(await safeEqual(String(body.password), env.APP_PASSWORD))) {
-      await new Promise((r) => setTimeout(r, 600));
-      return json({ error: "bad password" }, 401);
-    }
-    return json({ ok: true }, 200, { "set-cookie": `${COOKIE}=${token}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax` });
+    const login = String(body.login || "admin").trim().toLowerCase(), pw = String(body.password || "");
+    const fail = async () => { await new Promise((r) => setTimeout(r, 700)); return json({ error: "bad login" }, 401); };
+    if (!pw) return fail();
+    if (login === "admin" && (await safeEqual(pw, env.APP_PASSWORD))) return json({ ok: true }, 200, { "set-cookie": cookieHeader(await makeToken(env, "admin"), 31536000) });
+    if (!env.DB) return fail();
+    await ensureSchema(env.DB);
+    const u = await env.DB.prepare("SELECT id, hash, salt, active FROM users WHERE login = ?").bind(login).first();
+    if (!u || !u.active) return fail();
+    const h = await hashPassword(pw, u.salt);
+    if (!(await safeEqual(h.hash, u.hash))) return fail();
+    await env.DB.prepare("UPDATE users SET last_login = ? WHERE id = ?").bind(new Date().toISOString(), u.id).run();
+    return json({ ok: true }, 200, { "set-cookie": cookieHeader(await makeToken(env, u.id), 31536000) });
   }
   if (path === "/api/logout" && req.method === "POST") {
-    return json({ ok: true }, 200, { "set-cookie": `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` });
+    return json({ ok: true }, 200, { "set-cookie": cookieHeader("", 0) });
   }
 
-  const cookie = (req.headers.get("cookie") || "").split(/;\s*/).find((c) => c.startsWith(COOKIE + "="));
-  if (!cookie || !(await safeEqual(cookie.slice(COOKIE.length + 1), token))) return json({ error: "auth" }, 401);
-
   if (!env.DB) return json({ error: "D1 binding DB is missing" }, 500);
+  const user = await readSession(req, env);
+  if (!user) return json({ error: "auth" }, 401);
   await ensureSchema(env.DB);
+  const forbid = () => json({ error: "forbidden", role: user.role }, 403);
+
+  if (path === "/api/me" && req.method === "GET") return json({ id: user.id, name: user.name, login: user.login || "admin", role: user.role, builtin: !!user.builtin, write: ROLES[user.role].write, roles: Object.fromEntries(Object.entries(ROLES).map(([k, v]) => [k, v.name])) });
+  if (path === "/api/password" && req.method === "POST") {
+    if (user.builtin) return json({ error: "Пароль адміністратора admin змінюється в Cloudflare (APP_PASSWORD)" }, 400);
+    const b = await req.json().catch(() => ({}));
+    const u = await env.DB.prepare("SELECT hash, salt FROM users WHERE id = ?").bind(user.id).first();
+    if (!u || !(await safeEqual((await hashPassword(String(b.old || ""), u.salt)).hash, u.hash))) return json({ error: "Невірний поточний пароль" }, 400);
+    if (String(b.new || "").length < 8) return json({ error: "Новий пароль має бути щонайменше 8 символів" }, 400);
+    const h = await hashPassword(String(b.new));
+    await env.DB.prepare("UPDATE users SET hash = ?, salt = ? WHERE id = ?").bind(h.hash, h.salt, user.id).run();
+    return json({ ok: true });
+  }
+  if (path === "/api/users" && req.method === "GET") {
+    if (user.role !== "admin") return forbid();
+    const { results } = await env.DB.prepare("SELECT id, login, name, role, active, created, last_login FROM users ORDER BY name").all();
+    return json({ users: results });
+  }
+  if (path === "/api/users" && req.method === "POST") {
+    if (user.role !== "admin") return forbid();
+    const b = await req.json().catch(() => ({}));
+    const login = String(b.login || "").trim().toLowerCase(), name = String(b.name || "").trim().slice(0, 100), role = ROLES[b.role] ? b.role : "viewer", active = b.active === false ? 0 : 1;
+    if (!/^[a-z0-9._-]{3,40}$/.test(login) || login === "admin") return json({ error: "Логін: 3–40 латинських літер, цифр, . _ - (не admin)" }, 400);
+    if (!name) return json({ error: "Вкажіть ім’я" }, 400);
+    const clash = await env.DB.prepare("SELECT id FROM users WHERE login = ?").bind(login).first();
+    if (clash && clash.id !== b.id) return json({ error: "Такий логін уже є" }, 400);
+    if (b.id) {
+      await env.DB.prepare("UPDATE users SET login = ?, name = ?, role = ?, active = ? WHERE id = ?").bind(login, name, role, active, b.id).run();
+      if (b.password) { if (String(b.password).length < 8) return json({ error: "Пароль щонайменше 8 символів" }, 400); const h = await hashPassword(String(b.password)); await env.DB.prepare("UPDATE users SET hash = ?, salt = ? WHERE id = ?").bind(h.hash, h.salt, b.id).run(); }
+      return json({ ok: true, id: b.id });
+    }
+    if (String(b.password || "").length < 8) return json({ error: "Пароль щонайменше 8 символів" }, 400);
+    const h = await hashPassword(String(b.password)); const id = crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO users (id, login, name, role, hash, salt, active, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(id, login, name, role, h.hash, h.salt, active, new Date().toISOString()).run();
+    return json({ ok: true, id });
+  }
+  const um = path.match(/^\/api\/users\/([0-9a-f-]{36})$/);
+  if (um && req.method === "DELETE") { if (user.role !== "admin") return forbid(); await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(um[1]).run(); return json({ ok: true }); }
 
   if (path === "/api/all" && req.method === "GET") {
     const now = new Date().toISOString();
@@ -62,6 +142,7 @@ async function handleApi(req, env, url) {
     const col = url.searchParams.get("col") || "", id = url.searchParams.get("id") || "";
     const name = (url.searchParams.get("name") || "file").slice(0, 200);
     if (!COLS.has(col) || !ID_RE.test(id)) return json({ error: "bad target" }, 400);
+    if (!canWriteCol(user, col)) return forbid();
     const buf = new Uint8Array(await req.arrayBuffer());
     if (!buf.length) return json({ error: "empty file" }, 400);
     if (buf.length > 20 * 1024 * 1024) return json({ error: "file larger than 20 MB" }, 413);
@@ -84,6 +165,8 @@ async function handleApi(req, env, url) {
     return new Response(out, { headers: { "content-type": f.type, "content-length": String(out.length), "cache-control": "private, max-age=3600", "content-disposition": dl + "; filename*=UTF-8''" + encodeURIComponent(f.name), "x-content-type-options": "nosniff" } });
   }
   if (fm && req.method === "DELETE") {
+    const fr = await env.DB.prepare("SELECT col FROM files WHERE id = ?").bind(fm[1]).first();
+    if (fr && !canWriteCol(user, fr.col)) return forbid();
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
   }
@@ -117,6 +200,7 @@ async function handleApi(req, env, url) {
   if (m) {
     const col = m[1], id = decodeURIComponent(m[2]);
     if (!COLS.has(col) || !ID_RE.test(id)) return json({ error: "bad path" }, 400);
+    if (req.method !== "GET" && !canWriteCol(user, col)) return forbid();
     const updated = new Date().toISOString();
     if (req.method === "PUT") {
       const text = await req.text();
@@ -124,6 +208,7 @@ async function handleApi(req, env, url) {
       let data;
       try { data = JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
       if (!data || typeof data !== "object" || Array.isArray(data)) return json({ error: "body must be an object" }, 400);
+      data.updatedBy = user.name;
       await env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES (?, ?, ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = excluded.data, updated = excluded.updated, deleted = 0")
         .bind(col, id, JSON.stringify(data), updated).run();
       return json({ ok: true, updated });
@@ -141,6 +226,7 @@ async function ensureSchema(db) {
   if (schemaReady) return;
   await db.prepare("CREATE TABLE IF NOT EXISTS docs (col TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (col, id))").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS docs_updated ON docs (updated)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, login TEXT UNIQUE NOT NULL, name TEXT, role TEXT, hash TEXT, salt TEXT, active INTEGER DEFAULT 1, created TEXT, last_login TEXT)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, col TEXT NOT NULL, doc TEXT NOT NULL, name TEXT NOT NULL, type TEXT, size INTEGER, created TEXT)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS files_doc ON files (col, doc)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS file_chunks (file_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (file_id, idx))").run();
