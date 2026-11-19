@@ -574,6 +574,7 @@ function attachMaps(){
     const M = MAPS[key] || (MAPS[key] = createMap(key));
     slot.appendChild(M.el);
     const pm = pendingMaps[key] || {}; M.fields = pm.fields || []; M.parcels = pm.parcels || [];
+    if(!M.ro && window.ResizeObserver && M.map.resize){ M.ro = new ResizeObserver(() => { try { M.map.resize(); } catch(e){} }); M.ro.observe(M.el); }
     requestAnimationFrame(() => { M.map.resize(); updateMapData(M); });
   });
 }
