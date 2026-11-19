@@ -50,6 +50,11 @@ async function cdseToken(env) {
 const cookieHeader = (v, age) => `${COOKIE}=${v}; Path=/; Max-Age=${age}; HttpOnly; Secure; SameSite=Lax`;
 
 export default {
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return;
+    await ensureSchema(env.DB);
+    ctx.waitUntil(makeBackup(env, "auto"));
+  },
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!url.pathname.startsWith("/api/")) {
@@ -177,6 +182,47 @@ async function handleApi(req, env, url) {
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
   }
+  if (path === "/api/backups" && req.method === "GET") {
+    if (user.role !== "admin") return forbid();
+    const { results } = await env.DB.prepare("SELECT id, created, kind, docs, size, author FROM backups ORDER BY created DESC").all();
+    return json({ backups: results });
+  }
+  if (path === "/api/backups" && req.method === "POST") {
+    if (user.role !== "admin") return forbid();
+    return json(await makeBackup(env, "manual", user.name));
+  }
+  const bm = path.match(/^\/api\/backups\/([0-9a-f-]{36})$/);
+  if (bm && req.method === "GET") {
+    if (user.role !== "admin") return forbid();
+    const b = await env.DB.prepare("SELECT created FROM backups WHERE id = ?").bind(bm[1]).first();
+    if (!b) return json({ error: "not found" }, 404);
+    const { results } = await env.DB.prepare("SELECT data FROM backup_chunks WHERE backup_id = ? ORDER BY idx").bind(bm[1]).all();
+    const parts = results.map((r) => new Uint8Array(r.data)); const out = new Uint8Array(parts.reduce((t, p) => t + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+    return new Response(out, { headers: { "content-type": "application/gzip", "content-disposition": "attachment; filename=klg-agro-backup-" + b.created.slice(0, 16).replace(/[:T]/g, "-") + ".json.gz", "cache-control": "no-store" } });
+  }
+  if (bm && req.method === "DELETE") {
+    if (user.role !== "admin") return forbid();
+    await env.DB.batch([env.DB.prepare("DELETE FROM backup_chunks WHERE backup_id = ?").bind(bm[1]), env.DB.prepare("DELETE FROM backups WHERE id = ?").bind(bm[1])]);
+    return json({ ok: true });
+  }
+  if (path === "/api/export" && req.method === "GET") {
+    if (user.role !== "admin") return forbid();
+    return new Response(JSON.stringify(await snapshot(env)), { headers: { "content-type": "application/json; charset=utf-8", "content-disposition": "attachment; filename=klg-agro-export-" + new Date().toISOString().slice(0, 10) + ".json", "cache-control": "no-store" } });
+  }
+  if (path === "/api/import" && req.method === "POST") {
+    if (user.role !== "admin") return forbid();
+    const mode = url.searchParams.get("mode") === "replace" ? "replace" : "merge";
+    let snap; try { snap = await req.json(); } catch (e) { return json({ error: "Файл не є резервною копією" }, 400); }
+    if (!snap || snap.app !== "klg-agro-pole" || !Array.isArray(snap.docs)) return json({ error: "Файл не є резервною копією КЛГ Агро Поле" }, 400);
+    await makeBackup(env, "before-restore", user.name);
+    const updated = new Date().toISOString(); const stmts = []; const keep = new Set();
+    for (const d of snap.docs) { if (!COLS.has(d.col) || !ID_RE.test(String(d.id || "")) || !d.data || typeof d.data !== "object") continue; keep.add(d.col + "|" + d.id);
+      stmts.push(env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES (?, ?, ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = excluded.data, updated = excluded.updated, deleted = 0").bind(d.col, d.id, JSON.stringify(d.data), updated)); }
+    let removed = 0;
+    if (mode === "replace") { const { results } = await env.DB.prepare("SELECT col, id FROM docs WHERE deleted = 0").all(); for (const r of results) if (!keep.has(r.col + "|" + r.id)) { removed++; stmts.push(env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, r.col, r.id)); } }
+    for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+    return json({ ok: true, restored: keep.size, removed, mode });
+  }
   if (path.startsWith("/api/ndvi/") && req.method === "POST") {
     if (!env.CDSE_CLIENT_ID || !env.CDSE_CLIENT_SECRET) return json({ error: "ndvi_not_configured" }, 503);
     const b = await req.json().catch(() => ({}));
@@ -270,11 +316,29 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.da
   return json({ error: "not found" }, 404);
 }
 
+async function snapshot(env) {
+  const { results } = await env.DB.prepare("SELECT col, id, data FROM docs WHERE deleted = 0").all();
+  const { results: files } = await env.DB.prepare("SELECT id, col, doc, name, type, size, created FROM files").all();
+  return { app: "klg-agro-pole", version: 1, created: new Date().toISOString(), docs: results.map((r) => ({ col: r.col, id: r.id, data: JSON.parse(r.data) })), files };
+}
+async function makeBackup(env, kind, author) {
+  const snap = await snapshot(env);
+  const gz = new Uint8Array(await new Response(new Blob([JSON.stringify(snap)]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+  const id = crypto.randomUUID(); const CH = 512 * 1024;
+  const stmts = [env.DB.prepare("INSERT INTO backups (id, created, kind, docs, size, author) VALUES (?, ?, ?, ?, ?, ?)").bind(id, snap.created, kind, snap.docs.length, gz.length, author || "")];
+  for (let i = 0, n = 0; i < gz.length; i += CH, n++) stmts.push(env.DB.prepare("INSERT INTO backup_chunks (backup_id, idx, data) VALUES (?, ?, ?)").bind(id, n, gz.slice(i, i + CH).buffer));
+  for (let i = 0; i < stmts.length; i += 10) await env.DB.batch(stmts.slice(i, i + 10));
+  const { results: old } = await env.DB.prepare("SELECT id FROM backups WHERE kind = 'auto' ORDER BY created DESC LIMIT -1 OFFSET 30").all();
+  for (const o of old) await env.DB.batch([env.DB.prepare("DELETE FROM backup_chunks WHERE backup_id = ?").bind(o.id), env.DB.prepare("DELETE FROM backups WHERE id = ?").bind(o.id)]);
+  return { ok: true, id, docs: snap.docs.length, size: gz.length, created: snap.created };
+}
 async function ensureSchema(db) {
   if (schemaReady) return;
   await db.prepare("CREATE TABLE IF NOT EXISTS docs (col TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (col, id))").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS docs_updated ON docs (updated)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, login TEXT UNIQUE NOT NULL, name TEXT, role TEXT, hash TEXT, salt TEXT, active INTEGER DEFAULT 1, created TEXT, last_login TEXT)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS backups (id TEXT PRIMARY KEY, created TEXT, kind TEXT, docs INTEGER, size INTEGER, author TEXT)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS backup_chunks (backup_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (backup_id, idx))").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, col TEXT NOT NULL, doc TEXT NOT NULL, name TEXT NOT NULL, type TEXT, size INTEGER, created TEXT)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS files_doc ON files (col, doc)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS file_chunks (file_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (file_id, idx))").run();

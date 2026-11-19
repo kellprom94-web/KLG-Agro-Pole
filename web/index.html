@@ -188,6 +188,7 @@ tr:last-child td{border-bottom:0}
     <a href="#wms" data-v="wms">Склад</a>
     <a href="#refs" data-v="refs">Довідники</a>
     <a href="#users" data-v="users" id="usersLink" hidden>Користувачі</a>
+    <a href="#backup" data-v="backup" id="backupLink" hidden>Резервні копії</a>
     <a href="#reports" data-v="reports">Звіти</a>
     <div class="season">
       <label for="seasonSel">Сезон</label>
@@ -2572,6 +2573,7 @@ async function loadMe(){
   if(box && ME) box.innerHTML = `<div style="color:#fff;font-weight:600">${esc(ME.name)}</div><div style="opacity:.7">${esc(ME.roles[ME.role] || ME.role)}</div>${ME.builtin ? "" : `<button class="btn sm" type="button" id="pwBtn" style="background:transparent;color:var(--rail-ink);border-color:#33433a">Змінити пароль</button>`}`;
   const pw = document.getElementById("pwBtn"); if(pw) pw.onclick = passwordDialog;
   const ul = document.getElementById("usersLink"); if(ul) ul.hidden = !(ME && ME.role === "admin");
+  const bl = document.getElementById("backupLink"); if(bl) bl.hidden = !(ME && ME.role === "admin");
   render();
 }
 function roleBanner(){
@@ -2777,6 +2779,50 @@ function fieldPageAction(a, d){
   return false;
 }
 
+/* ---------- backups (admin) ---------- */
+let BACKUPS = null;
+async function loadBackups(){ try { BACKUPS = (await api("/backups")).backups; } catch(e){ BACKUPS = []; } render(); }
+const KIND_NAME = { auto: "Автоматична", manual: "Вручну", "before-restore": "Перед відновленням" };
+function viewBackup(){
+  if(!ME || ME.role !== "admin") return header("Резервні копії") + `<div class="card"><div class="empty">Розділ доступний лише адміністратору.</div></div>`;
+  if(BACKUPS == null){ loadBackups(); return header("Резервні копії") + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
+  const last = BACKUPS[0];
+  return header("Резервні копії", `<button class="btn" type="button" data-act="exportAll">Вивантажити все (JSON)</button><button class="btn" type="button" data-act="restore">Відновити з файлу…</button><button class="btn pri" type="button" data-act="backupNow">Створити копію зараз</button>`) + `
+  <div class="kpis"><div class="kpi"><b>${BACKUPS.length}</b><span>копій зберігається</span></div><div class="kpi"><b>${last ? fdate(last.created.slice(0,10)) + " " + last.created.slice(11,16) : "—"}</b><span>остання копія (UTC)</span></div><div class="kpi"><b>${last ? fmt0(last.docs) : "—"}</b><span>записів в останній копії</span></div></div>
+  <p class="note">Автоматична копія робиться щоночі о 03:17 за Києвом, зберігаються останні 30. Копії лежать у вашій базі Cloudflare; для повної надійності раз на тиждень завантажуйте копію собі на комп’ютер. Прикріплені файли (скани, фото) в копію не входять — лише їх список. Додатково Cloudflare D1 має власне відновлення бази на будь-яку хвилину за останні дні (Time Travel) у панелі Cloudflare.</p>
+  <div class="tw"><table><thead><tr><th>Дата і час (UTC)</th><th>Тип</th><th class="n">Записів</th><th class="n">Розмір</th><th>Автор</th><th></th></tr></thead><tbody>
+  ${BACKUPS.length ? BACKUPS.map(b => `<tr><td>${fdate(b.created.slice(0,10))} ${b.created.slice(11,16)}</td><td>${esc(KIND_NAME[b.kind] || b.kind)}</td><td class="n">${fmt0(b.docs)}</td><td class="n">${fmtSize(b.size)}</td><td>${esc(b.author || "")}</td><td><a class="btn sm" href="/api/backups/${b.id}">Завантажити</a> <button class="btn sm" type="button" data-act="restoreBackup" data-id="${b.id}">Відновити</button> <button class="btn sm danger" type="button" data-act="delBackup" data-id="${b.id}">×</button></td></tr>`).join("") : `<tr><td colspan="6"><div class="empty">Копій ще немає. Натисніть «Створити копію зараз».</div></td></tr>`}
+  </tbody></table></div>`;
+}
+async function readBackupFile(file){
+  let buf = await file.arrayBuffer(); const u = new Uint8Array(buf);
+  if(u[0] === 0x1f && u[1] === 0x8b) buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  return new TextDecoder().decode(buf);
+}
+function restoreDialog(text, label){
+  openModal({ title: "Відновлення з резервної копії", saveLabel: "Відновити",
+    body: `${text ? `<p>Джерело: <b>${esc(label)}</b></p>` : `<div class="f"><label class="full">Файл копії (.json або .json.gz)<input type="file" id="rsF" accept=".json,.gz,application/json,application/gzip"></label></div>`}
+    <div class="f"><label class="full">Режим<select id="rsM">${opt("merge", "Злиття: повернути записи з копії, нові записи залишити")}${opt("replace", "Повна заміна: база стане точно як у копії")}</select></label></div>
+    <div class="banner err">Перед відновленням автоматично створюється копія поточного стану, тож дію можна відкотити.</div><div class="note" id="rsE"></div>`,
+    onSave: async (m) => {
+      let t = text; if(!t){ const f = m.querySelector("#rsF").files[0]; if(!f){ m.querySelector("#rsE").textContent = "Оберіть файл."; return false; } try { t = await readBackupFile(f); } catch(e){ m.querySelector("#rsE").textContent = "Не вдалося прочитати файл."; return false; } }
+      m.querySelector("#rsE").textContent = "Відновлюю…";
+      const r = await fetch("/api/import?mode=" + val(m, "rsM"), { method: "POST", headers: { "content-type": "application/json" }, body: t });
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok){ m.querySelector("#rsE").textContent = j.error || "Помилка відновлення."; return false; }
+      toast(`Відновлено записів: ${j.restored}${j.removed ? ", прибрано: " + j.removed : ""}`); BACKUPS = null; await initDb();
+    }
+  });
+}
+async function backupAction(a, d){
+  if(a === "backupNow"){ toast("Створюю копію…"); try { const j = await api("/backups", { method: "POST" }); toast(`Копію створено: ${fmt0(j.docs)} записів, ${fmtSize(j.size)}`); } catch(e){} BACKUPS = null; loadBackups(); return true; }
+  if(a === "exportAll"){ const a2 = document.createElement("a"); a2.href = "/api/export"; document.body.appendChild(a2); a2.click(); a2.remove(); return true; }
+  if(a === "restore"){ restoreDialog(null); return true; }
+  if(a === "restoreBackup"){ const b = (BACKUPS || []).find(x => x.id === d.id); try { const r = await fetch("/api/backups/" + d.id); const t = await readBackupFile(new File([await r.blob()], "b.gz")); restoreDialog(t, "копія від " + (b ? fdate(b.created.slice(0,10)) + " " + b.created.slice(11,16) : "")); } catch(e){ toast("Не вдалося прочитати копію"); } return true; }
+  if(a === "delBackup"){ confirmBox("Видалити цю резервну копію?", async () => { await fetch("/api/backups/" + d.id, { method: "DELETE" }); BACKUPS = null; loadBackups(); }); return true; }
+  return false;
+}
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2841,7 +2887,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -2889,6 +2935,7 @@ main.addEventListener("click", e => {
     if(planAction(a, d)) return;
     if(a === "newUser") return userDialog(null);
     if(fieldPageAction(a, d)) return;
+    if(["backupNow","exportAll","restore","restoreBackup","delBackup"].includes(a)){ backupAction(a, d); return; }
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
