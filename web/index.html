@@ -191,6 +191,7 @@ tr:last-child td{border-bottom:0}
     <a href="#users" data-v="users" id="usersLink" hidden>Користувачі</a>
     <a href="#backup" data-v="backup" id="backupLink" hidden>Резервні копії</a>
     <a href="#reports" data-v="reports">Звіти</a>
+    <a href="#telegram" data-v="telegram">Telegram</a>
     <div class="season">
       <label for="seasonSel">Сезон</label>
       <select id="seasonSel"></select>
@@ -2825,6 +2826,39 @@ async function backupAction(a, d){
   return false;
 }
 
+/* ---------- Telegram notifications ---------- */
+let TGI = null, TGCODE = null;
+async function loadTg(){ try { TGI = await api("/tg/info"); } catch(e){ TGI = { configured: false }; } render(); }
+const ROLE_DIGEST = { admin: "усе: агрономія, техніка, склад і пальне, оренда, погода", agronomist: "агрооперації на сьогодні й прострочені, огляди з ураженням, погода для обприскування", mechanic: "ТО техніки, залишки АЗС і складу", storekeeper: "залишки складу й АЗС", land: "договори оренди, що закінчуються", accountant: "договори оренди, що закінчуються", viewer: "нічого (роль лише для перегляду)" };
+function viewTelegram(){
+  const H = header("Сповіщення в Telegram");
+  if(TGI == null){ loadTg(); return H + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
+  const admin = ME && ME.role === "admin";
+  if(!TGI.configured) return H + `<div class="card"><h2>Бот ще не підключено</h2>${admin ? `<ol style="line-height:1.7">
+    <li>У Telegram відкрийте <b>@BotFather</b>, надішліть <code>/newbot</code>, задайте назву (напр. «КЛГ Агро Поле») та ім’я, що закінчується на <code>bot</code>.</li>
+    <li>BotFather надішле токен виду <code>123456:ABC…</code>. Нікому його не пересилайте.</li>
+    <li>Cloudflare → Workers &amp; Pages → <b>klg-agro-pole</b> → Settings → Variables and Secrets → Add: тип <b>Secret</b>, назва <code>TELEGRAM_BOT_TOKEN</code>, значення — токен. Deploy.</li>
+    <li>Оновіть цю сторінку й натисніть «Підключити бота».</li></ol>` : `<div class="empty">Попросіть адміністратора підключити бота.</div>`}</div>`;
+  const bot = TGI.bot ? "@" + TGI.bot : "бот";
+  let html = H + `<div class="kpis"><div class="kpi"><b>${esc(bot)}</b><span>бот програми</span></div><div class="kpi"><b>${TGI.linked ? "Підключено" : "Ні"}</b><span>ваш Telegram</span></div><div class="kpi"><b>07:07</b><span>щоденне зведення (Київ)</span></div></div>`;
+  if(admin && TGI.hook && !TGI.hook.ok) html += `<div class="banner err">Бот ще не з’єднаний із програмою. <button class="btn sm pri" type="button" data-act="tgSetup">Підключити бота</button>${TGI.hook.error ? `<div class="note">${esc(TGI.hook.error)}</div>` : ""}</div>`;
+  html += `<div class="card"><h2>Мої сповіщення</h2><p>Для вашої ролі в зведенні: <b>${esc(ROLE_DIGEST[ME ? ME.role : "viewer"] || "")}</b>. Агроному й адміністратору також миттєво приходить сповіщення, коли в огляді поля ураження ≥ 30%.</p>
+    ${TGCODE ? `<p><a class="btn pri" target="_blank" rel="noopener" href="https://t.me/${esc(TGCODE.bot || TGI.bot)}?start=${esc(TGCODE.code)}">Відкрити Telegram і підключити</a></p><p class="note">Або надішліть боту ${esc(bot)} команду <code>/start ${esc(TGCODE.code)}</code>. Код діє 15 хвилин. Потім натисніть «Оновити».</p>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${TGI.linked ? `<button class="btn pri" type="button" data-act="tgTest">Надіслати зведення зараз</button><button class="btn" type="button" data-act="tgCode">Підключити ще один чат</button><button class="btn danger" type="button" data-act="tgUnlink">Відключити</button>` : `<button class="btn pri" type="button" data-act="tgCode">Отримати посилання для підключення</button>`}<button class="btn" type="button" data-act="tgReload">Оновити</button></div></div>`;
+  if(admin && TGI.all) html += `<div class="card"><h2>Підключені чати (${TGI.all.length})</h2>${TGI.all.length ? `<div class="tw"><table><thead><tr><th>Користувач</th><th>Роль</th></tr></thead><tbody>${TGI.all.map(l => `<tr><td>${esc(l.name)}</td><td>${esc((ME.roles||{})[l.role] || l.role)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">Ще ніхто не підключився. Кожен користувач підключає свій Telegram сам у цьому розділі.</div>`}
+    <p class="note">Повторне з’єднання: <button class="btn sm" type="button" data-act="tgSetup">Перепідключити вебхук</button></p></div>`;
+  return html;
+}
+async function tgAction(a){
+  try {
+    if(a === "tgSetup"){ const j = await api("/tg/setup", { method: "POST" }); toast(j.ok ? "Бота підключено" : "Помилка: " + (j.description || "")); TGI = null; render(); }
+    if(a === "tgCode"){ TGCODE = await api("/tg/code", { method: "POST" }); render(); }
+    if(a === "tgReload"){ TGI = null; TGCODE = null; render(); }
+    if(a === "tgTest"){ const j = await api("/tg/test", { method: "POST" }); toast(j.sent ? "Зведення надіслано в Telegram" : "Не вдалося надіслати"); }
+    if(a === "tgUnlink"){ confirmBox("Відключити сповіщення в Telegram?", async () => { await api("/tg/unlink", { method: "POST" }); TGI = null; render(); }); }
+  } catch(e){}
+}
+
 /* ---------- economics: field & crop cost and margin ---------- */
 const COST_CATS = ["Послуги сторонніх організацій","Зарплата","Техніка (власна)","Амортизація","Страхування","Податки і збори","Сушка і доробка","Зберігання","Логістика","Інше"];
 function econSettings(){ return S.settings.find(x => x.id === "econ") || { id: "econ", prices: {}, fuelPrice: "" }; }
@@ -2995,7 +3029,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { econ:viewEcon, backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { telegram:viewTelegram, econ:viewEcon, backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -3045,6 +3079,7 @@ main.addEventListener("click", e => {
     if(fieldPageAction(a, d)) return;
     if(["newCost","savePrices","csvEcon"].includes(a)){ econAction(a, d); return; }
     if(["backupNow","exportAll","restore","restoreBackup","delBackup"].includes(a)){ backupAction(a, d); return; }
+    if(a.startsWith("tg")){ tgAction(a, d); return; }
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);

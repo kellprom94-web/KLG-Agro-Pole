@@ -53,10 +53,12 @@ export default {
   async scheduled(event, env, ctx) {
     if (!env.DB) return;
     await ensureSchema(env.DB);
-    ctx.waitUntil(makeBackup(env, "auto"));
+    if (event.cron === "7 5 * * *") { if (env.TELEGRAM_BOT_TOKEN) ctx.waitUntil(sendDigests(env)); }
+    else ctx.waitUntil(makeBackup(env, "auto"));
   },
   async fetch(req, env) {
     const url = new URL(req.url);
+    if (url.pathname.startsWith("/tg/hook/") && req.method === "POST" && env.TELEGRAM_BOT_TOKEN && env.APP_PASSWORD && url.pathname === (await tgHookPath(env))) { try { return await handleTgHook(req, env); } catch (e) { return new Response("ok"); } }
     if (!url.pathname.startsWith("/api/")) {
       return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "x-frame-options": "DENY", "referrer-policy": "same-origin" } });
     }
@@ -182,6 +184,30 @@ async function handleApi(req, env, url) {
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
   }
+  if (path === "/api/tg/info" && req.method === "GET") {
+    if (!env.TELEGRAM_BOT_TOKEN) return json({ configured: false });
+    const me = await TG(env, "getMe"); const linked = await env.DB.prepare("SELECT COUNT(*) AS n FROM tg_links WHERE user_id = ?").bind(user.id).first();
+    let hook = null; if (user.role === "admin") { const w = await TG(env, "getWebhookInfo"); hook = w.ok ? { url: !!w.result.url, ok: (w.result.url || "").endsWith(await tgHookPath(env)), error: w.result.last_error_message || "" } : null; }
+    const all = user.role === "admin" ? (await tgLinks(env)).map((l) => ({ name: l.name, role: l.role })) : null;
+    return json({ configured: true, bot: me.ok ? me.result.username : null, linked: (linked || {}).n || 0, hook, all });
+  }
+  if (path === "/api/tg/setup" && req.method === "POST") {
+    if (user.role !== "admin") return forbid();
+    if (!env.TELEGRAM_BOT_TOKEN) return json({ error: "TELEGRAM_BOT_TOKEN не задано" }, 400);
+    const r = await TG(env, "setWebhook", { url: url.origin + (await tgHookPath(env)), secret_token: (await hmacHex(env.APP_PASSWORD, "tg-secret")).slice(0, 48), allowed_updates: ["message"], drop_pending_updates: true });
+    await TG(env, "setMyCommands", { commands: [{ command: "digest", description: "Зведення зараз" }, { command: "stop", description: "Вимкнути сповіщення" }] });
+    return json({ ok: !!r.ok, description: r.description || "" });
+  }
+  if (path === "/api/tg/code" && req.method === "POST") {
+    if (!env.TELEGRAM_BOT_TOKEN) return json({ error: "not configured" }, 400);
+    const code = [...crypto.getRandomValues(new Uint8Array(8))].map((b) => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[b % 32]).join("");
+    await env.DB.prepare("INSERT INTO tg_codes (code, user_id, name, role, exp) VALUES (?, ?, ?, ?, ?)").bind(code, user.id, user.name, user.role, Date.now() + 15 * 60e3).run();
+    const me = await TG(env, "getMe");
+    return json({ code, bot: me.ok ? me.result.username : null });
+  }
+  if (path === "/api/tg/unlink" && req.method === "POST") { await env.DB.prepare("DELETE FROM tg_links WHERE user_id = ?").bind(user.id).run(); return json({ ok: true }); }
+  if (path === "/api/tg/test" && req.method === "POST") { if (!env.TELEGRAM_BOT_TOKEN) return json({ error: "not configured" }, 400);
+    const ls = (await tgLinks(env)).filter((l) => l.user_id === user.id); let n = 0; for (const l of ls) n += await sendDigests(env, l.chat_id); return json({ sent: n }); }
   if (path === "/api/backups" && req.method === "GET") {
     if (user.role !== "admin") return forbid();
     const { results } = await env.DB.prepare("SELECT id, created, kind, docs, size, author FROM backups ORDER BY created DESC").all();
@@ -303,6 +329,10 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.da
       try { data = JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
       if (!data || typeof data !== "object" || Array.isArray(data)) return json({ error: "body must be an object" }, 400);
       data.updatedBy = user.name;
+      if (col === "scoutreports" && env.TELEGRAM_BOT_TOKEN) { const sev = Math.max(0, ...(data.threats || []).map((t) => Number(t.severity) || 0)); const prev = await env.DB.prepare("SELECT data FROM docs WHERE col = ? AND id = ?").bind(col, id).first();
+        const prevSev = prev ? Math.max(0, ...((JSON.parse(prev.data).threats) || []).map((t) => Number(t.severity) || 0)) : 0;
+        if (sev >= 30 && prevSev < 30) { const f = await env.DB.prepare("SELECT data FROM docs WHERE col = 'fields' AND id = ?").bind(data.fieldId || "").first(); const fname = f ? JSON.parse(f.data).name : "";
+          await tgNotifyRoles(env, ["admin", "agronomist"], `🚨 <b>Огляд поля ${tgEsc(fname)}</b>: ураження до ${sev}%\n${tgEsc(data.note || "")}\nАвтор: ${tgEsc(user.name)}`).catch(() => {}); } }
       await env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES (?, ?, ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = excluded.data, updated = excluded.updated, deleted = 0")
         .bind(col, id, JSON.stringify(data), updated).run();
       return json({ ok: true, updated });
@@ -337,6 +367,8 @@ async function ensureSchema(db) {
   await db.prepare("CREATE TABLE IF NOT EXISTS docs (col TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (col, id))").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS docs_updated ON docs (updated)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, login TEXT UNIQUE NOT NULL, name TEXT, role TEXT, hash TEXT, salt TEXT, active INTEGER DEFAULT 1, created TEXT, last_login TEXT)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS tg_links (chat_id TEXT PRIMARY KEY, user_id TEXT, name TEXT, role TEXT, created TEXT)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS tg_codes (code TEXT PRIMARY KEY, user_id TEXT, name TEXT, role TEXT, exp INTEGER)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS backups (id TEXT PRIMARY KEY, created TEXT, kind TEXT, docs INTEGER, size INTEGER, author TEXT)").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS backup_chunks (backup_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (backup_id, idx))").run();
   await db.prepare("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, col TEXT NOT NULL, doc TEXT NOT NULL, name TEXT NOT NULL, type TEXT, size INTEGER, created TEXT)").run();
@@ -361,6 +393,101 @@ async function safeEqual(a, b) {
   const x = new Uint8Array(ha), y = new Uint8Array(hb);
   let d = 0; for (let i = 0; i < x.length; i++) d |= x[i] ^ y[i];
   return d === 0;
+}
+
+/* ---------- Telegram notifications ---------- */
+const TG = (env, method, body) => fetch("https://api.telegram.org/bot" + env.TELEGRAM_BOT_TOKEN + "/" + method, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) }).then((r) => r.json()).catch(() => ({ ok: false }));
+const tgEsc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+async function tgHookPath(env) { return "/tg/hook/" + (await hmacHex(env.APP_PASSWORD, "tg-hook")).slice(0, 32); }
+async function tgSend(env, chatId, text) { return TG(env, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true }); }
+async function tgLinks(env) { const { results } = await env.DB.prepare("SELECT chat_id, user_id, name, role FROM tg_links").all(); return results; }
+async function loadAll(env) { const { results } = await env.DB.prepare("SELECT col, id, data FROM docs WHERE deleted = 0").all(); const S = {}; for (const r of results) (S[r.col] ||= []).push(Object.assign({ id: r.id }, JSON.parse(r.data))); return S; }
+const nn = (v) => { const x = parseFloat(String(v ?? "").replace(",", ".")); return Number.isFinite(x) ? x : 0; };
+const kyivToday = () => new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);
+const fd = (s) => (s ? s.slice(8, 10) + "." + s.slice(5, 7) : "—");
+function digestSections(S, origin) {
+  const td = kyivToday(), g = (c) => S[c] || [], by = (c, id) => g(c).find((x) => x.id === id) || {};
+  const out = {};
+  // leases ending within 30 days or ended in the last 30 days without auto-renewal
+  const lim = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), past = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const ls = g("leases").filter((l) => !l.archived && !l.autoRenew && l.status !== "розірваний").filter((l) => !l.factEnd).map((l) => ({ l, end: l.dateTo })).filter((x) => x.end && x.end <= lim && x.end >= past).sort((a, b) => a.end.localeCompare(b.end));
+  if (ls.length) out.land = "📄 <b>Договори оренди, що закінчуються</b>\n" + ls.slice(0, 12).map((x) => `• ${tgEsc(x.l.number || "#")} — ${tgEsc(by("owners", x.l.ownerId).name || "")}, до ${fd(x.end)}${x.end < td ? " ❗ закінчився" : ""}`).join("\n") + (ls.length > 12 ? `\n…ще ${ls.length - 12}` : "");
+  // maintenance due by plans
+  const reading = (mid) => { let km = 0, mh = 0; g("fuelings").filter((f) => f.machineId === mid).forEach((f) => { km = Math.max(km, nn(f.odometer)); mh = Math.max(mh, nn(f.motohours)); }); g("service").filter((s) => s.machineId === mid && s.status === "done").forEach((s) => { km = Math.max(km, nn(s.km)); mh = Math.max(mh, nn(s.mh)); }); return { km, mh }; };
+  const late = [];
+  g("mplans").filter((p) => !p.archived).forEach((p) => g("machines").filter((x) => ((p.machineIds || []).length ? p.machineIds.includes(x.id) : (!p.subtype || p.subtype === x.subtype) && (!p.type || p.type === (x.type || "Агро")))).forEach((x) => {
+    const last = g("service").filter((s) => s.machineId === x.id && s.status === "done" && (s.planId === p.id || s.kind === p.name)).sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0]; if (!last) return;
+    const r = reading(x.id); const why = [];
+    if (nn(p.everyKm) && r.km - nn(last.km) >= nn(p.everyKm)) why.push("пробіг");
+    if (nn(p.everyMh) && r.mh - nn(last.mh) >= nn(p.everyMh)) why.push("мотогодини");
+    if (nn(p.everyDays) && last.date && (new Date(td) - new Date(last.date)) / 864e5 >= nn(p.everyDays)) why.push("строк");
+    if (why.length) late.push(`• ${tgEsc(x.name)} — ${tgEsc(p.name)} (${why.join(", ")})`);
+  }));
+  const planned = g("service").filter((s) => s.status !== "done" && s.date && s.date <= td).map((s) => `• ${tgEsc(by("machines", s.machineId).name || "")} — ${tgEsc(s.kind || "ТО")}, план на ${fd(s.date)}`);
+  if (late.length || planned.length) out.mech = "🔧 <b>Обслуговування техніки</b>\n" + [...late, ...planned].slice(0, 15).join("\n");
+  // fuel stations below 15% of capacity (quantity replay)
+  const qty = {}; const key = (w, p) => w + "|" + p; const add = (w, p, q) => { qty[key(w, p)] = (qty[key(w, p)] || 0) + q; };
+  const fuelD = g("fuelings").map((f) => { const st = by("fuelstations", f.stationId); return st.warehouseId && f.productId ? { kind: "issue", status: "posted", date: f.date, createdAt: (f.date || "") + (f.time || ""), from: st.warehouseId, lines: [{ productId: f.productId, qty: f.liters }] } : null; }).filter(Boolean);
+  [...g("whdocs"), ...fuelD].filter((d) => d.status === "posted").sort((a, b) => ((a.date || "") + (a.createdAt || "")).localeCompare((b.date || "") + (b.createdAt || ""))).forEach((d) => {
+    const L = d.lines || [];
+    if (d.kind === "receipt") L.forEach((l) => add(d.to, l.productId, nn(l.qty)));
+    if (d.kind === "issue") L.forEach((l) => add(d.from, l.productId, -nn(l.qty)));
+    if (d.kind === "transfer") L.forEach((l) => { add(d.from, l.productId, -nn(l.qty)); add(d.to, l.productId, nn(l.qty)); });
+    if (d.kind === "inventory") L.forEach((l) => { qty[key(d.to, l.productId)] = nn(l.fact); });
+    if (d.kind === "production") { (d.inputs || []).forEach((l) => add(d.from, l.productId, -nn(l.qty))); L.forEach((l) => add(d.to, l.productId, nn(l.qty))); }
+  });
+  const low = g("fuelstations").filter((s) => s.warehouseId && s.productId && nn(s.capacity)).map((s) => ({ s, q: qty[key(s.warehouseId, s.productId)] || 0 })).filter((x) => x.q < nn(x.s.capacity) * 0.15);
+  const neg = Object.entries(qty).filter(([, q]) => q < -1e-6).map(([k, q]) => { const [w, p] = k.split("|"); return `• ${tgEsc(by("products", p).name || "?")} на «${tgEsc(by("warehouses", w).name || "?")}»: ${q.toFixed(1)}`; });
+  if (low.length || neg.length) out.store = "⛽ <b>Склад і пальне</b>\n" + [...low.map((x) => `• АЗС «${tgEsc(x.s.name)}»: залишок ${Math.round(x.q)} л з ${Math.round(nn(x.s.capacity))}`), ...neg.map((s) => s + " (від’ємний залишок)")].join("\n");
+  // agronomy: overdue operations and fresh scouting with high damage
+  const overdue = g("ops").filter((o) => (o.status || "planned") !== "done" && o.status !== "cancel" && o.plannedTo && o.plannedTo < td);
+  const today = g("ops").filter((o) => (o.status || "planned") === "planned" && o.plannedFrom === td);
+  const yest = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+  const hot = g("scoutreports").filter((r) => (r.date || "") >= yest && Math.max(0, ...(r.threats || []).map((t) => nn(t.severity))) >= 20);
+  const agro = [];
+  if (today.length) agro.push(`Заплановано на сьогодні: ${today.length}\n` + today.slice(0, 8).map((o) => `• ${tgEsc(o.workType)} — ${tgEsc(by("fields", o.fieldId).name || "")}`).join("\n"));
+  if (overdue.length) agro.push(`Прострочені агрооперації: ${overdue.length}\n` + overdue.slice(0, 8).map((o) => `• ${tgEsc(o.workType)} — ${tgEsc(by("fields", o.fieldId).name || "")}, план до ${fd(o.plannedTo)}`).join("\n"));
+  if (hot.length) agro.push("Огляди з високим ураженням:\n" + hot.slice(0, 8).map((r) => `• ${tgEsc(by("fields", r.fieldId).name || "")}: ` + (r.threats || []).map((t) => `${tgEsc(by("plantthreats", t.threatId).name || "")} ${nn(t.severity)}%`).join(", ")).join("\n"));
+  if (agro.length) out.agro = "🌱 <b>Агрономія</b>\n" + agro.join("\n\n");
+  return out;
+}
+const ROLE_SECTIONS = { admin: ["agro", "mech", "store", "land", "wx"], agronomist: ["agro", "wx"], mechanic: ["mech", "store"], storekeeper: ["store"], land: ["land"], accountant: ["land"], viewer: [] };
+async function sprayWeather(S) {
+  const fs = (S.fields || []).filter((f) => !f.archived && f.contours && f.contours.length); if (!fs.length) return "";
+  let x = 0, y = 0, n = 0; fs.forEach((f) => f.contours.forEach((r) => r.forEach((p) => { x += p[0]; y += p[1]; n++; })));
+  const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${(y / n).toFixed(3)}&longitude=${(x / n).toFixed(3)}&timezone=Europe%2FKyiv&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max&forecast_days=2`).then((r) => r.json()).catch(() => null);
+  if (!r || !r.daily) return "";
+  const d = r.daily; const line = (i, lbl) => { const w = d.wind_speed_10m_max[i] / 3.6, p = d.precipitation_sum[i], t = d.temperature_2m_max[i]; const ok = w <= 5 && p < 1 && t <= 25; return `${lbl}: ${Math.round(d.temperature_2m_min[i])}…${Math.round(t)}°, вітер до ${w.toFixed(1)} м/с, опади ${p.toFixed(1)} мм — ${ok ? "✅ можна обприскувати" : "⚠️ обприскування обмежене"}`; };
+  return "🌦 <b>Погода по господарству</b>\n" + line(0, "Сьогодні") + "\n" + line(1, "Завтра");
+}
+async function sendDigests(env, onlyChat) {
+  await ensureSchema(env.DB);
+  const links = (await tgLinks(env)).filter((l) => !onlyChat || String(l.chat_id) === String(onlyChat)); if (!links.length) return 0;
+  const S = await loadAll(env); const sec = digestSections(S); const wx = links.some((l) => (ROLE_SECTIONS[l.role] || []).includes("wx")) ? await sprayWeather(S) : "";
+  let sent = 0;
+  for (const l of links) {
+    const parts = (ROLE_SECTIONS[l.role] || []).map((k) => (k === "wx" ? wx : sec[k])).filter(Boolean);
+    const text = `<b>КЛГ Агро Поле · ${fd(kyivToday())}</b>\n\n` + (parts.length ? parts.join("\n\n") : "Усе спокійно: термінових подій немає ✅");
+    const r = await tgSend(env, l.chat_id, text.slice(0, 4000)); if (r.ok) sent++;
+  }
+  return sent;
+}
+async function tgNotifyRoles(env, roles, text) { if (!env.TELEGRAM_BOT_TOKEN) return; await ensureSchema(env.DB); for (const l of await tgLinks(env)) if (roles.includes(l.role)) await tgSend(env, l.chat_id, text); }
+async function handleTgHook(req, env) {
+  if (req.headers.get("x-telegram-bot-api-secret-token") !== (await hmacHex(env.APP_PASSWORD, "tg-secret")).slice(0, 48)) return new Response("forbidden", { status: 403 });
+  const up = await req.json().catch(() => ({})); const msg = up.message || {}; const chat = (msg.chat || {}).id; const text = String(msg.text || "").trim();
+  if (!chat) return new Response("ok");
+  await ensureSchema(env.DB);
+  const m = text.match(/^\/start\s+([A-Z0-9]{6,12})$/i);
+  if (m) {
+    const c = await env.DB.prepare("SELECT user_id, name, role, exp FROM tg_codes WHERE code = ?").bind(m[1].toUpperCase()).first();
+    if (!c || c.exp < Date.now()) { await tgSend(env, chat, "Код недійсний або застарів. Отримайте новий у програмі: меню внизу → «Telegram»."); return new Response("ok"); }
+    await env.DB.batch([env.DB.prepare("INSERT INTO tg_links (chat_id, user_id, name, role, created) VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET user_id = excluded.user_id, name = excluded.name, role = excluded.role").bind(String(chat), c.user_id, c.name, c.role, new Date().toISOString()), env.DB.prepare("DELETE FROM tg_codes WHERE code = ?").bind(m[1].toUpperCase())]);
+    await tgSend(env, chat, `Готово, ${tgEsc(c.name)}! Щоранку о 7:00 надсилатиму зведення для ролі «${tgEsc((ROLES[c.role] || {}).name || c.role)}».\n\n/digest — зведення зараз\n/stop — відписатися`);
+  } else if (/^\/stop/.test(text)) { await env.DB.prepare("DELETE FROM tg_links WHERE chat_id = ?").bind(String(chat)).run(); await tgSend(env, chat, "Сповіщення вимкнено. Підключитися знову можна з програми."); }
+  else if (/^\/digest/.test(text)) { const n = await sendDigests(env, chat); if (!n) await tgSend(env, chat, "Цей чат ще не підключено. Отримайте код у програмі: меню внизу → «Telegram»."); }
+  else await tgSend(env, chat, "Щоб підключити сповіщення, відкрийте програму КЛГ Агро Поле → меню внизу → «Telegram» і натисніть посилання з кодом.\n\n/digest — зведення зараз\n/stop — відписатися");
+  return new Response("ok");
 }
 
 const HTML = __HTML__;
