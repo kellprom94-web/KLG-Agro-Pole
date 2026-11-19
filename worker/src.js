@@ -269,7 +269,7 @@ async function handleApi(req, env, url) {
     if (!kind) return json({ error: "not found" }, 404);
     const okDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "");
     const cacheKey = new Request("https://cache.klg/ndvi/" + kind + "/" + (await hmacHex("k", JSON.stringify([g, b.from, b.to, b.date, b.width]))));
-    let cached = null; try { cached = await caches.default.match(cacheKey); } catch (e) {} if (cached) return cached;
+    let cached = null; if (!b.debug) { try { cached = await caches.default.match(cacheKey); } catch (e) {} } if (cached) return cached;
     const token = await cdseToken(env);
     const shPost = async (paths, body) => { for (const pth of paths) { const r = await fetch("https://sh.dataspace.copernicus.eu" + pth, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json", accept: kind === "image" ? "image/png" : "application/json" }, body: JSON.stringify(body) }); if (r.status !== 404) return r; } return null; };
     const bounds = { geometry: g, properties: { crs: "http://www.opengis.net/def/crs/EPSG/0/4326" } };
@@ -282,6 +282,7 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;const v=
       const r = await shPost(["/statistics/v1", "/api/v1/statistics"], { input: { bounds, data: [{ type: "sentinel-2-l2a", dataFilter: { maxCloudCoverage: 70 } }] }, aggregation: { timeRange: { from: b.from + "T00:00:00Z", to: b.to + "T23:59:59Z" }, aggregationInterval: { of: "P1D" }, evalscript, resx: 0.0001, resy: 0.0001 }, calculations: { default: {} } });
       if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
       const j = await r.json();
+      if (b.debug) return json({ raw: JSON.stringify(j).slice(0, 3000) });
       const pts = (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {}; const total = (s2.sampleCount || 0); const valid = total - (s2.noDataCount || 0);
         return { date: (d.interval || {}).from ? d.interval.from.slice(0, 10) : "", mean: s2.mean, min: s2.min, max: s2.max, p: total ? valid / total : 0 }; }).filter((x) => x.date && x.p >= 0.5 && Number.isFinite(x.mean));
       resp = json({ points: pts });
