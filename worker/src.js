@@ -1,6 +1,6 @@
 // КЛГ Агро Поле — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
-const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations"]);
+const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
@@ -10,7 +10,7 @@ const ROLES = {
   mechanic: { name: "Механік / диспетчер", write: ["machines", "implements", "people", "tasks", "service", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "whrequests"] },
   storekeeper: { name: "Комірник", write: ["warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "products", "fuelstations", "fuelings"] },
   land: { name: "Земельник", write: ["parcels", "leases", "owners", "payments", "settings"] },
-  accountant: { name: "Бухгалтер", write: ["payments", "invoices", "pricelists", "owners", "settings"] },
+  accountant: { name: "Бухгалтер", write: ["payments", "invoices", "pricelists", "owners", "settings", "costs"] },
   viewer: { name: "Лише перегляд", write: [] },
 };
 const canWriteCol = (u, col) => !!u && ROLES[u.role] && (ROLES[u.role].write === "*" || ROLES[u.role].write.includes(col));

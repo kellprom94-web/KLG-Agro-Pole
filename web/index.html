@@ -184,6 +184,7 @@ tr:last-child td{border-bottom:0}
     <a href="#fuel" data-v="fuel">Паливо</a>
     <a href="#harvest" data-v="harvest">Перевезення врожаю</a>
     <div class="sec">Інше</div>
+    <a href="#econ" data-v="econ">Економіка</a>
     <a href="#land" data-v="land">Земельний банк</a>
     <a href="#wms" data-v="wms">Склад</a>
     <a href="#refs" data-v="refs">Довідники</a>
@@ -222,7 +223,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -241,7 +242,7 @@ const state = {
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
   landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
-  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips", scoutTab: "reports", planTab: "agro",
+  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips", scoutTab: "reports", planTab: "agro", econTab: "fields",
   mapVB: {}
 };
 
@@ -2565,7 +2566,7 @@ function planAction(a, d){
 
 /* ---------- users & roles ---------- */
 let ME = null;
-const VIEW_COL = { fields: "fields", rotation: "fields", ops: "ops", plans: "agroplans", scout: "scoutreports", machines: "machines", tasks: "tasks", service: "service", fuel: "fuelings", harvest: "harvests", land: "parcels", wms: "whdocs", refs: "products" };
+const VIEW_COL = { econ: "costs", fields: "fields", rotation: "fields", ops: "ops", plans: "agroplans", scout: "scoutreports", machines: "machines", tasks: "tasks", service: "service", fuel: "fuelings", harvest: "harvests", land: "parcels", wms: "whdocs", refs: "products" };
 function canWriteCol(col){ if(!ME) return true; return ME.write === "*" || (ME.write || []).includes(col); }
 async function loadMe(){
   try { ME = await api("/me"); } catch(e){ ME = null; }
@@ -2680,7 +2681,7 @@ async function showNdviImage(f, date){
 }
 
 /* ---------- field page (opens in a new tab, like Cropwise /fields/<id>/dashboards) ---------- */
-const FP_TABS = [["summary","Зведена інформація"],["ops","Агрооперації"],["machines","Роботи машин"],["yield","Показники врожаю"],["nutrition","План живлення"],["scout","Огляди"],["notes","Нотатки"],["rotation","Сівозміна"],["area","Площа і контури"],["land","Земельні ділянки"],["files","Файли"]];
+const FP_TABS = [["summary","Зведена інформація"],["ops","Агрооперації"],["machines","Роботи машин"],["yield","Показники врожаю"],["nutrition","План живлення"],["econ","Економіка"],["scout","Огляди"],["notes","Нотатки"],["rotation","Сівозміна"],["area","Площа і контури"],["land","Земельні ділянки"],["files","Файли"]];
 function openFieldTab(fid){ const w = window.open(location.pathname + "#field-" + fid, "_blank"); if(!w) location.hash = "field-" + fid; }
 function ndviMap(){ return state.view === "fieldpage" ? MAPS.fieldpage : MAPS.fields; }
 function fieldNutritionRow(f, season){
@@ -2765,6 +2766,7 @@ function viewFieldPage(){
       return `<tr class="click" data-parcel="${esc(p.id)}"><td><b>${esc(p.cadastre||"—")}</b></td><td class="n">${fmt(num(p.area),4)}</td><td>${esc(cpName(p.ownerId)||"—")}</td><td>${esc(parcelStatus(p))}</td><td>${d ? esc(d.number||"#") + " · " + esc(d.type||"") : "—"}</td><td>${fdate(parcelRightEnd(p))}</td><td class="n">${d && RENT_DOC_TYPES.includes(d.type) ? fmt(docYearPrice(d)) : "—"}</td></tr>`; }).join("")}</tbody></table></div><p class="note">Разом ${fmt(sum(parcels, p => p.area), 4)} га у ${parcels.length} ділянках. Прив’язати ділянки можна в «Земельний банк → Аналіз земельних ресурсів».</p>`
       : `<div class="card"><div class="empty">До поля ще не прив’язані земельні ділянки.</div></div>`;
   }
+  if(T === "econ") body = econFieldHtml(f);
   if(T === "files") body = `<div class="card" id="fpFiles"><div class="body"></div></div>`;
   return top + statusBanner() + tabs + body;
 }
@@ -2820,6 +2822,112 @@ async function backupAction(a, d){
   if(a === "restore"){ restoreDialog(null); return true; }
   if(a === "restoreBackup"){ const b = (BACKUPS || []).find(x => x.id === d.id); try { const r = await fetch("/api/backups/" + d.id); const t = await readBackupFile(new File([await r.blob()], "b.gz")); restoreDialog(t, "копія від " + (b ? fdate(b.created.slice(0,10)) + " " + b.created.slice(11,16) : "")); } catch(e){ toast("Не вдалося прочитати копію"); } return true; }
   if(a === "delBackup"){ confirmBox("Видалити цю резервну копію?", async () => { await fetch("/api/backups/" + d.id, { method: "DELETE" }); BACKUPS = null; loadBackups(); }); return true; }
+  return false;
+}
+
+/* ---------- economics: field & crop cost and margin ---------- */
+const COST_CATS = ["Послуги сторонніх організацій","Зарплата","Техніка (власна)","Амортизація","Страхування","Податки і збори","Сушка і доробка","Зберігання","Логістика","Інше"];
+function econSettings(){ return S.settings.find(x => x.id === "econ") || { id: "econ", prices: {}, fuelPrice: "" }; }
+function cropPrice(crop, season){ const p = (econSettings().prices || {})[season] || {}; return num(p[crop]); }
+function fuelPriceDefault(){ const s = econSettings(); if(num(s.fuelPrice)) return num(s.fuelPrice); const f = S.products.find(p => p.type === "Паливо"); return f ? unitPrice(f.id) : 0; }
+function seasonOf(date){ return Number((date || "").slice(0, 4)); }
+function computeEconomics(season){
+  const fields = S.fields.filter(f => !f.archived && (fieldCrop(f, season) || S.ops.some(o => o.fieldId === f.id && Number(o.season) === season)));
+  const R = {}; fields.forEach(f => R[f.id] = { f, crop: fieldCrop(f, season) || "Не вказана", area: num(f.area), materials: 0, matEst: 0, fuel: 0, rent: 0, direct: 0, overhead: 0, lines: [] });
+  const add = (fid, key, v, line) => { const r = R[fid]; if(!r || !v) return; r[key] += v; if(line) r.lines.push(Object.assign({ key, v }, line)); };
+  // 1. materials & fuel actually issued from the warehouse to a field (incl. fuel issued at stations)
+  const { moves } = stockReplay("");
+  const opsWithIssue = new Set();
+  moves.filter(mv => mv.d.kind === "issue" && mv.value).forEach(mv => {
+    const op = byId("ops", mv.d.opId); const fid = mv.d.fieldId || (op && op.fieldId); if(!fid) return;
+    const s2 = op ? Number(op.season) : seasonOf(mv.d.date); if(s2 !== season) return;
+    if(mv.d.opId) opsWithIssue.add(mv.d.opId);
+    const p = byId("products", mv.p) || {};
+    add(fid, p.type === "Паливо" ? "fuel" : "materials", -mv.value, { what: (p.name || "?") + " " + fmt(-mv.qty, 2) + " " + (p.unit || ""), src: "склад · " + (mv.d.number || "") + " " + fdate(mv.d.date) });
+  });
+  // 2. materials planned in operations that were done but not issued from the warehouse (estimate)
+  S.ops.filter(o => Number(o.season) === season && R[o.fieldId] && !opsWithIssue.has(o.id)).forEach(o => { const area = opDone(o); if(!area) return;
+    (o.applications || []).forEach(a => { const v = num(a.rate) * area * unitPrice(a.productId); if(v) add(o.fieldId, "matEst", v, { what: prodName(a.productId) + " " + fmt(num(a.rate) * area, 2) + " " + (a.unit || ""), src: "оцінка з агрооперації №" + o.number }); }); });
+  // 3. fuel from machine tasks when no fuel was issued to the field
+  const fp = fuelPriceDefault();
+  Object.values(R).forEach(r => { if(r.fuel) return; S.tasks.filter(t => t.fieldId === r.f.id && seasonOf(t.date) === season && num(t.fuel)).forEach(t => add(r.f.id, "fuel", num(t.fuel) * fp, { what: fmt(num(t.fuel), 0) + " л × " + fmt(fp) + " грн", src: "завдання " + fdate(t.date) + " · " + (nameOf("machines", t.machineId) || "") })); });
+  // 4. land rent: document rent → parcels by area → fields equally
+  S.leases.filter(l => !l.archived && RENT_DOC_TYPES.includes(l.type)).forEach(l => { const rent = rentForYear(l, season); if(!rent) return; const ps = docParcels(l); const tot = sum(ps, p => p.area) || 1;
+    ps.forEach(p => { const fl = (p.fieldIds || []).filter(id => R[id]); if(!fl.length) return; const part = rent * num(p.area) / tot / fl.length; fl.forEach(fid => add(fid, "rent", part, { what: "оренда " + (p.cadastre || ""), src: "договір " + (l.number || "") + " · " + (cpName(l.ownerId) || "") })); }); });
+  // 5. other costs: direct (field / crop / group) and overhead allocated by area
+  const totalArea = sum(Object.values(R), r => r.area) || 1;
+  S.costs.filter(c => Number(c.season) === season).forEach(c => { const v = num(c.amount); if(!v) return;
+    let targets = [];
+    if(c.fieldId && R[c.fieldId]) targets = [R[c.fieldId]];
+    else if(c.crop) targets = Object.values(R).filter(r => r.crop === c.crop);
+    else if(c.group) targets = Object.values(R).filter(r => (r.f.group || "") === c.group);
+    const key = targets.length ? "direct" : "overhead"; if(!targets.length) targets = Object.values(R);
+    const ta = sum(targets, r => r.area) || 1; targets.forEach(r => add(r.f.id, key, v * r.area / ta, { what: (c.category || "Інше") + (c.note ? ": " + c.note : ""), src: key === "overhead" ? "загальногосподарські, розподіл за площею" : (c.fieldId ? "на поле" : c.crop ? "на культуру " + c.crop : "на групу " + c.group) })); });
+  return Object.values(R).map(r => { const s = fieldSeason(r.f, season); const t = num(s.yield) * r.area / 10; const price = cropPrice(r.crop, season);
+    const total = r.materials + r.matEst + r.fuel + r.rent + r.direct + r.overhead; const revenue = t * price;
+    return Object.assign(r, { total, perHa: r.area ? total / r.area : 0, tons: t, perT: t ? total / t : 0, price, revenue, margin: revenue ? revenue - total : null, marginHa: revenue && r.area ? (revenue - total) / r.area : null, plannedT: num(s.plannedYield) * r.area / 10 }); });
+}
+function econRowHtml(r, label){
+  const c = v => v == null ? "" : v < 0 ? "color:var(--bad)" : "color:var(--good)";
+  return `<td class="n">${fmt(r.area)}</td><td class="n">${r.materials ? fmt0(r.materials) : "—"}</td><td class="n">${r.matEst ? fmt0(r.matEst) : "—"}</td><td class="n">${r.fuel ? fmt0(r.fuel) : "—"}</td><td class="n">${r.rent ? fmt0(r.rent) : "—"}</td><td class="n">${r.direct ? fmt0(r.direct) : "—"}</td><td class="n">${r.overhead ? fmt0(r.overhead) : "—"}</td><td class="n"><b>${fmt0(r.total)}</b></td><td class="n">${fmt0(r.perHa)}</td><td class="n">${r.tons ? fmt(r.tons, 1) : "—"}</td><td class="n">${r.perT ? fmt0(r.perT) : "—"}</td><td class="n">${r.revenue ? fmt0(r.revenue) : "—"}</td><td class="n" style="${c(r.margin)}">${r.margin == null ? "—" : fmt0(r.margin)}</td><td class="n" style="${c(r.marginHa)}">${r.marginHa == null ? "—" : fmt0(r.marginHa)}</td>`;
+}
+const ECON_HEAD = `<th class="n">Площа, га</th><th class="n">Матеріали (склад)</th><th class="n">Матеріали (оцінка)</th><th class="n">Пальне</th><th class="n">Оренда землі</th><th class="n">Прямі інші</th><th class="n">Накладні</th><th class="n">Всього, грн</th><th class="n">грн/га</th><th class="n">Урожай, т</th><th class="n">Собівартість, грн/т</th><th class="n">Виручка, грн</th><th class="n">Маржа, грн</th><th class="n">Маржа, грн/га</th>`;
+function sumRows(rows){ const k = ["area","materials","matEst","fuel","rent","direct","overhead","total","tons","revenue"]; const o = {}; k.forEach(x => o[x] = sum(rows, r => r[x])); o.perHa = o.area ? o.total / o.area : 0; o.perT = o.tons ? o.total / o.tons : 0; const anyRev = rows.some(r => r.revenue); o.margin = anyRev ? o.revenue - o.total : null; o.marginHa = anyRev && o.area ? o.margin / o.area : null; return o; }
+function viewEcon(){
+  const T = state.econTab || "fields"; const season = state.season;
+  const tabs = [["fields","По полях"],["crops","По культурах"],["costs","Інші витрати"],["prices","Ціни і налаштування"]];
+  let body = "";
+  if(T === "fields" || T === "crops"){
+    const rows = computeEconomics(season); state._econ = rows;
+    const tot = sumRows(rows);
+    const kpis = `<div class="kpis"><div class="kpi"><b>${fmt0(tot.total)}</b><span>грн витрат сезону ${season}</span></div><div class="kpi"><b>${fmt0(tot.perHa)}</b><span>грн/га в середньому</span></div><div class="kpi"><b>${tot.revenue ? fmt0(tot.revenue) : "—"}</b><span>грн виручки (урожай × ціна)</span></div><div class="kpi"><b style="color:${tot.margin == null ? "inherit" : tot.margin < 0 ? "var(--bad)" : "var(--good)"}">${tot.margin == null ? "—" : fmt0(tot.margin)}</b><span>грн маржа${tot.marginHa != null ? " · " + fmt0(tot.marginHa) + " грн/га" : ""}</span></div></div>`;
+    const note = `<p class="note">Матеріали (склад) — фактичне списання зі складу на поле за собівартістю. Матеріали (оцінка) — внесення з виконаних агрооперацій, які ще не списані зі складу, за ціною з прайс-листа. Пальне — видача на поле або пальне із завдань техніки. Оренда — орендна плата за ділянки, прив’язані до поля. Накладні — загальногосподарські витрати, розподілені за площею. Виручка = фактичний урожай × ціна на вкладці «Ціни».</p>`;
+    if(T === "fields"){
+      const sorted2 = [...rows].sort((a,b) => (a.f.group||"").localeCompare(b.f.group||"","uk") || a.f.name.localeCompare(b.f.name,"uk",{numeric:true}));
+      body = kpis + `<div class="filters"><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvEcon">Експорт</button></div>` + (rows.length ? `<div class="tw"><table><thead><tr><th>Поле</th><th>Культура</th>${ECON_HEAD}</tr></thead><tbody>${sorted2.map(r => `<tr class="click" data-econfield="${esc(r.f.id)}"><td><b>${esc(r.f.name)}</b><div class="note">${esc(r.f.group||"")}</div></td><td>${cropTag(r.crop)}</td>${econRowHtml(r)}</tr>`).join("")}<tr class="grp"><td colspan="2">Разом</td>${econRowHtml(tot)}</tr></tbody></table></div>` : `<div class="card"><div class="empty">Немає полів із культурою в сезоні ${season}.</div></div>`) + note;
+    } else {
+      const g = {}; rows.forEach(r => (g[r.crop] ||= []).push(r));
+      body = kpis + (rows.length ? `<div class="tw"><table><thead><tr><th>Культура</th><th class="n">Полів</th>${ECON_HEAD}<th class="n">Ціна, грн/т</th><th class="n">Беззбиткова ціна, грн/т</th><th class="n">Беззбитковий урожай, ц/га</th></tr></thead><tbody>${Object.entries(g).sort((a,b) => sum(b[1], r => r.area) - sum(a[1], r => r.area)).map(([crop, rs]) => { const t = sumRows(rs); const price = cropPrice(crop, season);
+        return `<tr><td>${cropTag(crop)}</td><td class="n">${rs.length}</td>${econRowHtml(t)}<td class="n">${price ? fmt0(price) : "—"}</td><td class="n">${t.tons ? fmt0(t.total / t.tons) : "—"}</td><td class="n">${price && t.area ? fmt(t.total / price / t.area * 10, 1) : "—"}</td></tr>`; }).join("")}<tr class="grp"><td colspan="2">Разом</td>${econRowHtml(tot)}<td colspan="3"></td></tr></tbody></table></div>` : `<div class="card"><div class="empty">Немає даних.</div></div>`) + note;
+    }
+  }
+  if(T === "costs"){
+    const list = S.costs.filter(c => Number(c.season) === season).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = `<div class="filters"><span class="muted">Сезон ${season} · ${list.length} записів · ${fmt0(sum(list, c => c.amount))} грн</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newCost">+ Витрата</button></div>
+    <div class="tw"><table><thead><tr><th>Дата</th><th>Стаття</th><th>На що відноситься</th><th class="n">Сума, грн</th><th>Контрагент</th><th>Примітка</th></tr></thead><tbody>${list.length ? list.map(c => `<tr class="click" data-cost="${esc(c.id)}"><td>${fdate(c.date)}</td><td>${esc(c.category||"")}</td><td>${c.fieldId ? "поле " + esc(nameOf("fields", c.fieldId)) : c.crop ? "культура " + esc(c.crop) : c.group ? "група " + esc(c.group) : `<span class="muted">загальногосподарські</span>`}</td><td class="n">${fmt(num(c.amount))}</td><td>${esc(cpName(c.counterpartyId)||"")}</td><td>${esc(c.note||"")}</td></tr>`).join("") : `<tr><td colspan="6"><div class="empty">Витрати, які не проходять через склад і оренду: послуги, зарплата, страхування, сушка тощо.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "prices"){
+    const s = econSettings(); const crops = [...new Set([...S.fields.map(f => fieldCrop(f, season)).filter(Boolean), ...Object.keys((s.prices || {})[season] || {})])];
+    body = `<div class="card" style="max-width:720px"><h2>Ціни реалізації, сезон ${season}</h2><p class="note">Ціна без ПДВ, грн за тонну. Використовується для виручки й маржі.</p><div class="tw"><table><thead><tr><th>Культура</th><th class="n">Ціна, грн/т</th></tr></thead><tbody>${crops.map(c => `<tr><td>${cropTag(c)}</td><td class="n"><input class="pr" data-crop="${esc(c)}" inputmode="decimal" value="${esc(((s.prices||{})[season]||{})[c] ?? "")}" style="width:120px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 6px;background:var(--surface)"></td></tr>`).join("") || `<tr><td colspan="2"><div class="empty">Вкажіть культури полів на сезон.</div></td></tr>`}</tbody></table></div>
+      <div class="f" style="margin-top:12px"><label>Ціна пального для розрахунку, грн/л<input id="ecFuel" inputmode="decimal" value="${esc(s.fuelPrice ?? "")}" placeholder="з прайс-листа: ${fmt(fuelPriceDefault())}"></label></div>
+      <div style="margin-top:12px"><button class="btn pri" type="button" data-act="savePrices">Зберегти</button></div></div>`;
+  }
+  return header("Економіка", `<span class="muted">Сезон ${season}</span>`) + statusBanner() + `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-econtab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function econFieldHtml(f){
+  const r = computeEconomics(state.season).find(x => x.f.id === f.id);
+  if(!r) return `<div class="card"><div class="empty">Немає культури або робіт на полі в сезоні ${state.season}.</div></div>`;
+  const parts = [["materials","Матеріали (склад)"],["matEst","Матеріали (оцінка)"],["fuel","Пальне"],["rent","Оренда землі"],["direct","Прямі інші витрати"],["overhead","Накладні (розподіл)"]];
+  return `<div class="kpis"><div class="kpi"><b>${fmt0(r.total)}</b><span>грн витрат · ${fmt0(r.perHa)} грн/га</span></div><div class="kpi"><b>${r.perT ? fmt0(r.perT) : "—"}</b><span>собівартість, грн/т${r.tons ? " · урожай " + fmt(r.tons, 1) + " т" : ""}</span></div><div class="kpi"><b style="color:${r.margin == null ? "inherit" : r.margin < 0 ? "var(--bad)" : "var(--good)"}">${r.margin == null ? "—" : fmt0(r.margin)}</b><span>маржа, грн${r.marginHa != null ? " · " + fmt0(r.marginHa) + " грн/га" : ""}</span></div></div>
+  <div class="grid g2"><div class="card"><h2>Структура витрат</h2><div class="tw"><table><tbody>${parts.map(([k, l]) => { const p = r.total ? r[k] / r.total * 100 : 0; return `<tr><td>${l}</td><td class="n">${fmt0(r[k])}</td><td class="n">${fmt0(r.area ? r[k] / r.area : 0)} грн/га</td><td style="width:30%"><div class="bar"><i style="width:${p}%"></i></div></td></tr>`; }).join("")}</tbody></table></div></div>
+  <div class="card"><h2>Деталізація (${r.lines.length})</h2>${r.lines.length ? `<div class="tw" style="max-height:420px;overflow:auto"><table><tbody>${r.lines.sort((a,b) => b.v - a.v).map(x => `<tr><td>${esc(x.what)}<div class="note">${esc(x.src)}</div></td><td class="n">${fmt0(x.v)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Витрат ще немає.</p>`}</div></div>`;
+}
+function costDialog(c){
+  const isNew = !c; c = c || { date: today(), season: state.season, category: COST_CATS[0] };
+  const groups = [...new Set(S.fields.map(f => f.group).filter(Boolean))]; const crops = [...new Set(S.fields.map(f => fieldCrop(f, state.season)).filter(Boolean))];
+  openModal({ title: isNew ? "Нова витрата" : "Витрата", wide: true,
+    body: `<div class="f"><label>Дата<input id="csD" type="date" value="${esc(c.date||"")}"></label><label>Сезон<input id="csS" type="number" value="${esc(c.season)}"></label><label>Стаття<select id="csC">${optsFrom(COST_CATS, c.category)}</select></label><label>Сума, грн<input id="csA" inputmode="decimal" value="${esc(c.amount??"")}"></label>
+      <label>На поле<select id="csF">${opt("", "—", c.fieldId)}${[...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true})).map(f => opt(f.id, f.name, c.fieldId)).join("")}</select></label><label>або на культуру<select id="csCr">${optsFrom(crops, c.crop, "—")}</select></label><label>або на групу полів<select id="csG">${optsFrom(groups, c.group, "—")}</select></label>
+      <label>Контрагент<select id="csCp">${cpOptions(c.counterpartyId)}</select></label><label class="full">Примітка<input id="csN" value="${esc(c.note||"")}"></label></div><p class="note">Якщо не вказати поле, культуру чи групу — витрата вважається загальногосподарською і розподіляється на всі поля пропорційно площі.</p>`,
+    onDelete: isNew ? null : async () => remove("costs", c.id),
+    onSave: async (m) => { if(!num(val(m,"csA"))){ m.querySelector("#csA").focus(); return false; } return !!(await save("costs", Object.assign({}, c, { date: val(m,"csD"), season: Number(val(m,"csS")) || state.season, category: val(m,"csC"), amount: num(val(m,"csA")), fieldId: val(m,"csF"), crop: val(m,"csCr"), group: val(m,"csG"), counterpartyId: val(m,"csCp"), note: val(m,"csN") }))); }
+  });
+}
+async function econAction(a, d){
+  if(a === "newCost"){ costDialog(null); return true; }
+  if(a === "savePrices"){ const s = Object.assign({}, econSettings()); const prices = Object.assign({}, s.prices || {}); const cur = {}; document.querySelectorAll("input.pr").forEach(x => { if(num(x.value)) cur[x.dataset.crop] = num(x.value); }); prices[state.season] = cur;
+    await save("settings", Object.assign(s, { id: "econ", prices, fuelPrice: num((document.getElementById("ecFuel") || {}).value) || "" })); toast("Збережено"); return true; }
+  if(a === "csvEcon" && state._econ){ exportCsv("Економіка полів " + state.season, ["Поле","Група","Культура","Площа, га","Матеріали (склад)","Матеріали (оцінка)","Пальне","Оренда","Прямі інші","Накладні","Всього","грн/га","Урожай, т","грн/т","Ціна, грн/т","Виручка","Маржа","Маржа грн/га"], state._econ.map(r => [r.f.name, r.f.group, r.crop, r.area, ...[r.materials, r.matEst, r.fuel, r.rent, r.direct, r.overhead, r.total, r.perHa].map(v => +v.toFixed(2)), +r.tons.toFixed(2), +r.perT.toFixed(2), r.price, +r.revenue.toFixed(2), r.margin == null ? "" : +r.margin.toFixed(2), r.marginHa == null ? "" : +r.marginHa.toFixed(2)])); return true; }
   return false;
 }
 
@@ -2887,7 +2995,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { econ:viewEcon, backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -2910,7 +3018,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2935,6 +3043,7 @@ main.addEventListener("click", e => {
     if(planAction(a, d)) return;
     if(a === "newUser") return userDialog(null);
     if(fieldPageAction(a, d)) return;
+    if(["newCost","savePrices","csvEcon"].includes(a)){ econAction(a, d); return; }
     if(["backupNow","exportAll","restore","restoreBackup","delBackup"].includes(a)){ backupAction(a, d); return; }
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
@@ -2952,6 +3061,9 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.econtab){ state.econTab = d.econtab; return render(); }
+  if(d.econfield){ openFieldTab(d.econfield); return; }
+  if(d.cost) return costDialog(byId("costs", d.cost));
   if(d.fptab){ state.fpTab = d.fptab; history.replaceState(null, "", "#field-" + state.fpId + (d.fptab === "summary" ? "" : "-" + d.fptab)); render(); window.scrollTo(0, 0); return; }
   if(d.ndvidate){ const f = byId("fields", state.view === "fieldpage" ? state.fpId : state.fieldSel); if(f) showNdviImage(f, d.ndvidate); return; }
   if(d.user) return userDialog((USERS || []).find(u => u.id === d.user));
@@ -3034,7 +3146,7 @@ document.addEventListener("keydown", e => { if(e.key === "Escape" && document.ge
 const seasonSel = document.getElementById("seasonSel");
 function fillSeasons(){ const c = curSeason(); const ys = []; for(let y=c-5; y<=c+2; y++) ys.push(y); if(!ys.includes(state.season)) ys.push(state.season); seasonSel.innerHTML = ys.sort().map(y=>opt(y, "Сезон "+y, state.season)).join(""); }
 seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("season", state.season); render(); };
-function route(){ const h = (location.hash||"").replace("#",""); const fm = h.match(/^field-([A-Za-z0-9._-]+?)(?:-(summary|ops|machines|yield|nutrition|scout|notes|rotation|area|land|files))?$/); if(fm){ if(state.fpId !== fm[1]){ clearNdviLayer(); state.ndviShown = null; state.ndviAuto = null; if(MAPS.fieldpage) MAPS.fieldpage.fitted = false; } state.view = "fieldpage"; state.fpId = fm[1]; state.fieldSel = fm[1]; state.fpTab = fm[2] || state.fpTab || "summary"; } else state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
+function route(){ const h = (location.hash||"").replace("#",""); const fm = h.match(/^field-([A-Za-z0-9._-]+?)(?:-(summary|econ|ops|machines|yield|nutrition|scout|notes|rotation|area|land|files))?$/); if(fm){ if(state.fpId !== fm[1]){ clearNdviLayer(); state.ndviShown = null; state.ndviAuto = null; if(MAPS.fieldpage) MAPS.fieldpage.fitted = false; } state.view = "fieldpage"; state.fpId = fm[1]; state.fieldSel = fm[1]; state.fpTab = fm[2] || state.fpTab || "summary"; } else state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
 window.addEventListener("hashchange", route);
 fillSeasons(); route();
 document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; ME = null; USERS = null; COLS.forEach(c => S[c] = []); const mb = document.getElementById("meBox"); if(mb) mb.innerHTML = ""; render(); showLogin(); };
