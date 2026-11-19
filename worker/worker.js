@@ -59,6 +59,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/tg/hook/") && req.method === "POST" && env.TELEGRAM_BOT_TOKEN && env.APP_PASSWORD && url.pathname === (await tgHookPath(env))) { try { return await handleTgHook(req, env); } catch (e) { return new Response("ok"); } }
+    if (url.pathname.startsWith("/.well-known/") || url.pathname === "/register" || url.pathname === "/authorize" || url.pathname === "/token") return new Response(JSON.stringify({ error: "not_found" }), { status: 404, headers: { "content-type": "application/json" } });
     if (url.pathname.startsWith("/mcp/") && env.DB && env.APP_PASSWORD) { if (url.pathname === (await aoMcpPath(env))) { await ensureSchema(env.DB); return handleMcp(req, env); } return new Response("not found", { status: 404 }); }
     if (!url.pathname.startsWith("/api/")) {
       return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "x-frame-options": "DENY", "referrer-policy": "same-origin" } });
