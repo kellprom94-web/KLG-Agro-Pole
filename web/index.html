@@ -686,7 +686,7 @@ function viewDash(){
     </div>
   </div>
   <div class="grid g2" style="margin-top:16px">
-    <div class="card"><h2>Останні завдання техніки</h2>${recent.length ? tasksTable(recent, true) : `<div class="empty">Завдань ще немає.</div>`}</div>
+    <div class="card"><h2>Останні операції техніки</h2>${recentMachineOpsHtml(10)}</div>
     <div class="card"><h2>Прогрес агрооперацій ${seasonLabel(state.season)}</h2>${opsProgress(ops)}</div>
   </div>`;
 }
@@ -2844,6 +2844,8 @@ function viewFieldPage(){
     const ts = S.tasks.filter(t => t.fieldId === f.id).sort((a,b) => (b.date + (b.start||"")).localeCompare(a.date + (a.start||"")));
     const fu = S.fuelings.filter(x => x.fieldId === f.id);
     body = `<div class="kpis"><div class="kpi"><b>${ts.length}</b><span>завдань техніки</span></div><div class="kpi"><b>${fmt(sum(ts, t => t.area))}</b><span>га оброблено</span></div><div class="kpi"><b>${fmt0(sum(ts, t => t.fuel) + sum(fu, x => x.liters))}</b><span>л пального</span></div><div class="kpi"><b>${fmt(sum(ts, hoursOf), 1)}</b><span>мотогодин</span></div></div>` + (ts.length ? tasksTable(ts) : `<div class="card"><div class="empty">Робіт техніки на полі ще немає.</div></div>`);
+    { const W = aoFieldData(f).wb.filter(r => Number(r.w.season) === state.season);
+      if(W.length) body += `<div class="card" style="margin-top:16px"><h2>Шляхові листи з АгроОбліку · ${seasonLabel(state.season)} (${W.length})</h2><div class="tw"><table><thead><tr><th>Дата</th><th>№</th><th>Операція</th><th>Техніка</th><th>Механізатор</th><th class="n">Га</th><th class="n">Пальне, л</th></tr></thead><tbody>${W.map(r => `<tr class="click" data-aowb="${esc(r.w.id)}"><td>${fdate(r.w.date)}</td><td>${esc(r.w.number || "")}</td><td>${esc(r.w.opName || "")}</td><td>${esc([r.w.tractor, r.w.implement].filter(Boolean).join(" + "))}</td><td>${esc(r.w.driver || "")}</td><td class="n">${fmt(r.ha)}</td><td class="n">${fmt(r.fuel, 1)}</td></tr>`).join("")}</tbody></table></div></div>`; }
   }
   if(T === "yield"){
     const years = [...new Set([...Object.keys(f.seasons || {}).map(Number), ...S.harvests.filter(h => h.fieldId === f.id).map(h => Number(h.season || (h.date||"").slice(0,4)))])].sort((a,b) => b - a);
@@ -3006,6 +3008,24 @@ function viewAgrooblik(){
   ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p><button class="btn pri" type="button" data-act="aoCreate">Створити ці поля в AgroPulse (${unm.length})</button> <span class="note">Назва, площа, відділення (як група) і культури за сезонами. Контури можна домалювати або завантажити потім.</span></p><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
 }
 
+function aoWbField(x){ const k = aoNorm(x.field); const f = S.fields.find(ff => aoKeys(ff).has(k)); return { name: x.field || "", f }; }
+function recentMachineOpsHtml(n){
+  const rows = [];
+  S.tasks.forEach(t => { const f = byId("fields", t.fieldId); const op = byId("ops", t.opId); rows.push({ date: t.date || "", sort: (t.date || "") + (t.start || ""), kind: "Завдання", attr: `data-task="${esc(t.id)}"`, title: op ? opTitle(op) : (t.work || "—"), fields: f ? f.name : (t.place || ""), machine: [nameOf("machines", t.machineId), nameOf("implements", t.implementId)].filter(Boolean).join(" + "), driver: nameOf("people", t.driverId) || "", ha: num(t.area), fuel: num(t.fuel) }); });
+  S.aowaybills.forEach(w => { const fs = w.fields || []; rows.push({ date: w.date || "", sort: (w.date || "") + String(w.ts || "").padStart(15, "0"), kind: "Шляховий №" + (w.number || "—"), attr: `data-aowb="${esc(w.id)}"`, title: w.opName || "—", fields: fs.map(x => x.field).filter(Boolean).join(", "), machine: [w.tractor, w.implement].filter(x => x && x !== "Не вказано").join(" + "), driver: w.driver && w.driver !== "Не вказано" ? w.driver : "", ha: fs.reduce((a, x) => a + num(x.area), 0), fuel: num(w.fuel) }); });
+  rows.sort((a, b) => b.sort.localeCompare(a.sort));
+  const R = rows.slice(0, n);
+  if(!R.length) return `<div class="empty">Операцій техніки ще немає.</div>`;
+  return `<div class="tw"><table><thead><tr><th>Дата</th><th>Документ</th><th>Операція / поле</th><th>Техніка</th><th class="n">Га</th><th class="n">Пальне, л</th></tr></thead><tbody>${R.map(r => `<tr class="click" ${r.attr}><td>${fdate(r.date)}</td><td>${esc(r.kind)}</td><td>${esc(r.title)}<div class="note">${esc(r.fields.length > 60 ? r.fields.slice(0, 58) + "…" : r.fields)}</div></td><td>${esc(r.machine || "—")}<div class="note">${esc(r.driver)}</div></td><td class="n">${r.ha ? fmt(r.ha) : "—"}</td><td class="n">${r.fuel ? fmt(r.fuel, 1) : "—"}</td></tr>`).join("")}</tbody></table></div>${S.aowaybills.length ? `<p class="note">Разом із шляховими листами з АгроОбліку (${fmt0(S.aowaybills.length)}).</p>` : ""}`;
+}
+function aoWaybillDialog(id){
+  const w = S.aowaybills.find(x => x.id === id); if(!w) return;
+  const fs = w.fields || []; const tot = fs.reduce((a, x) => a + num(x.area), 0);
+  openModal({ title: "Шляховий лист №" + (w.number || "—") + " · " + fdate(w.date), saveLabel: null,
+    body: `<dl class="dl"><dt>Операція</dt><dd>${esc(w.opName || "—")}${w.variant ? " · " + esc(w.variant) : ""}</dd><dt>Техніка</dt><dd>${esc([w.tractor, w.implement].filter(Boolean).join(" + ") || "—")}</dd><dt>Механізатор</dt><dd>${esc(w.driver || "—")}</dd>${w.helper ? `<dt>Помічник</dt><dd>${esc(w.helper)}</dd>` : ""}<dt>Пальне</dt><dd>${fmt(num(w.fuel), 1)} л${tot ? " · " + fmt(num(w.fuel) / tot, 2) + " л/га" : ""}</dd><dt>Сезон</dt><dd>${esc(seasonLabel(w.season))}</dd></dl>
+    <div class="tw"><table><thead><tr><th>Поле</th><th class="n">Га</th><th class="n">Пальне (частка), л</th><th>Помічник</th></tr></thead><tbody>${fs.map(x => { const m = aoWbField(x); return `<tr><td>${m.f ? `<a href="#field-${esc(m.f.id)}">${esc(x.field)}</a>` : esc(x.field || "—")}</td><td class="n">${fmt(num(x.area))}</td><td class="n">${tot ? fmt(num(w.fuel) * num(x.area) / tot, 1) : "—"}</td><td>${esc(x.helper || "")}</td></tr>`; }).join("")}</tbody></table></div>
+    <p class="note">Дані з АгроОбліку, лише для перегляду. Змінюйте їх в АгроОбліку.</p>` });
+}
 /* ---------- Telegram notifications ---------- */
 let TGI = null, TGCODE = null;
 async function loadTg(){ try { TGI = await api("/tg/info"); } catch(e){ TGI = { configured: false }; } render(); }
@@ -3233,7 +3253,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-aowb],[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -3323,6 +3343,7 @@ main.addEventListener("click", e => {
   if(d.field){ state.fieldSel = d.field; openFieldTab(d.field); return render(); }
   if(d.op) return opDialog(byId("ops", d.op));
   if(d.machine){ state.machineId = d.machine; return render(); }
+  if(d.aowb) return aoWaybillDialog(d.aowb);
   if(d.task) return taskDialog(byId("tasks", d.task));
   if(d.service) return serviceDialog(byId("service", d.service));
   if(d.product) return simpleDialog("products", byId("products", d.product), "матеріал", productFields);
