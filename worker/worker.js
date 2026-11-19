@@ -268,7 +268,7 @@ async function handleApi(req, env, url) {
     const kind = path === "/api/ndvi/stats" ? "stats" : path === "/api/ndvi/image" ? "image" : "";
     if (!kind) return json({ error: "not found" }, 404);
     const okDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "");
-    const cacheKey = new Request("https://cache.klg/ndvi/" + kind + "/" + (await hmacHex("k", JSON.stringify([g, b.from, b.to, b.date, b.width]))));
+    const cacheKey = new Request("https://cache.klg/ndvi2/" + kind + "/" + (await hmacHex("k", JSON.stringify([g, b.from, b.to, b.date, b.width]))));
     let cached = null; if (!b.debug) { try { cached = await caches.default.match(cacheKey); } catch (e) {} } if (cached) return cached;
     const token = await cdseToken(env);
     const shPost = async (paths, body) => { for (const pth of paths) { const r = await fetch("https://sh.dataspace.copernicus.eu" + pth, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json", accept: kind === "image" ? "image/png" : "application/json" }, body: JSON.stringify(body) }); if (r.status !== 404) return r; } return null; };
