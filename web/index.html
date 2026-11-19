@@ -535,7 +535,7 @@ function startDraw(key, onDone){
 }
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
 function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
-function pickField(fid){ if(state.fieldSel !== fid){ clearNdviLayer(); state.ndviShown = null; } state.fieldSel = fid; if(state.view !== "fields") location.hash = "fields"; else render(); }
+function pickField(fid){ if(state.view === "fieldpage") return; openFieldTab(fid); }
 function attachMaps(){
   document.querySelectorAll(".mapslot").forEach(slot => {
     const key = slot.dataset.slot;
@@ -700,7 +700,7 @@ function fieldCard(f){
   const ops = S.ops.filter(o => o.fieldId === f.id).sort((a,b)=> (b.factFrom||b.plannedFrom||"").localeCompare(a.factFrom||a.plannedFrom||""));
   const years = Object.keys(f.seasons||{}).sort().reverse();
   return `<div class="card">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><h2 style="margin:0;flex:1">${esc(f.name)}</h2><button class="btn sm" type="button" data-act="editField" data-id="${esc(f.id)}">Редагувати</button><button class="btn sm" type="button" data-act="redraw" data-id="${esc(f.id)}">${f.contours?"Перемалювати контур":"Намалювати контур"}</button><button class="btn sm" type="button" data-act="newOp" data-field="${esc(f.id)}">+ Агрооперація</button></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><h2 style="margin:0;flex:1">${esc(f.name)}</h2><a class="btn sm pri" href="#field-${esc(f.id)}" target="_blank" rel="noopener">Відкрити сторінку поля ↗</a><button class="btn sm" type="button" data-act="editField" data-id="${esc(f.id)}">Редагувати</button><button class="btn sm" type="button" data-act="redraw" data-id="${esc(f.id)}">${f.contours?"Перемалювати контур":"Намалювати контур"}</button><button class="btn sm" type="button" data-act="newOp" data-field="${esc(f.id)}">+ Агрооперація</button></div>
     <dl class="dl">
       <dt>Група</dt><dd>${esc(f.group||"—")}</dd>
       <dt>Оброблювальна площа</dt><dd>${fmt(num(f.area))} га</dd>
@@ -2660,9 +2660,9 @@ function fillNdvi(){
   loadNdviStats(f).then(j => { const b = document.getElementById("ndviBox"); if(b && b.dataset.fid === f.id) b.innerHTML = ndviBoxHtml(f, j); if(!j.notConfigured && !state.ndviShown && (j.points||[]).length && state.ndviAuto !== f.id){ state.ndviAuto = f.id; showNdviImage(f, j.points[j.points.length - 1].date); } })
     .catch(e => { const b = document.getElementById("ndviBox"); if(b) b.innerHTML = `<p class="note">Не вдалося отримати дані NDVI (${esc(String(e.message || e))}).</p>`; });
 }
-function clearNdviLayer(){ const M = MAPS.fields; if(M && M.map.getLayer && M.map.getLayer("ndvi-img")){ M.map.removeLayer("ndvi-img"); M.map.removeSource("ndvi-img"); } if(state.ndviUrl){ URL.revokeObjectURL(state.ndviUrl); state.ndviUrl = null; } }
+function clearNdviLayer(){ const M = ndviMap(); if(M && M.map.getLayer && M.map.getLayer("ndvi-img")){ M.map.removeLayer("ndvi-img"); M.map.removeSource("ndvi-img"); } if(state.ndviUrl){ URL.revokeObjectURL(state.ndviUrl); state.ndviUrl = null; } }
 async function showNdviImage(f, date){
-  const M = MAPS.fields; if(!M || !M.map.addSource) return;
+  const M = ndviMap(); if(!M || !M.map.addSource) return;
   const b = bboxOf([f]); if(!b) return;
   const lat = (b[1] + b[3]) / 2, wm = (b[2] - b[0]) * 111320 * Math.cos(lat * Math.PI / 180), hm = (b[3] - b[1]) * 110540;
   const scale = Math.min(1, 1400 / Math.max(wm / 10, hm / 10)); const width = Math.max(64, Math.round(wm / 10 * scale)), height = Math.max(64, Math.round(hm / 10 * scale));
@@ -2675,6 +2675,106 @@ async function showNdviImage(f, date){
   if(M.map.isStyleLoaded()) add(); else M.map.once("idle", add);
   M.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, duration: 600, maxZoom: 16 });
   const el = document.getElementById("ndviBox"); if(el){ const j = Object.values(ndviCache).find(x => x && x.points && x.points.some(p => p.date === date)); if(j) el.innerHTML = ndviBoxHtml(f, j); }
+}
+
+/* ---------- field page (opens in a new tab, like Cropwise /fields/<id>/dashboards) ---------- */
+const FP_TABS = [["summary","Зведена інформація"],["ops","Агрооперації"],["machines","Роботи машин"],["yield","Показники врожаю"],["nutrition","План живлення"],["scout","Огляди"],["notes","Нотатки"],["rotation","Сівозміна"],["area","Площа і контури"],["land","Земельні ділянки"],["files","Файли"]];
+function openFieldTab(fid){ const w = window.open(location.pathname + "#field-" + fid, "_blank"); if(!w) location.hash = "field-" + fid; }
+function ndviMap(){ return state.view === "fieldpage" ? MAPS.fieldpage : MAPS.fields; }
+function fieldNutritionRow(f, season){
+  const s = fieldSeason(f, season); const rem = removalFor(s.crop); const yt = num(s.plannedYield) / 10; const need = rem && yt ? rem.map(r => r * yt) : null;
+  const applied = [0,0,0]; const lines = [];
+  S.ops.filter(o => o.fieldId === f.id && Number(o.season) === season).forEach(o => { const area = opDone(o); if(!area) return; (o.applications || []).forEach(a => { const p = byId("products", a.productId); if(!p) return; let kg = num(a.rate); if(a.unit === "т") kg *= 1000; if(a.unit === "л") kg *= num(p.density) || 1; const el = [num(p.n), num(p.p), num(p.k)].map(pct => kg * pct / 100); if(el.some(Boolean)){ el.forEach((v, i) => applied[i] += v); lines.push({ o, p, a, el }); } }); });
+  return { s, need, applied, lines };
+}
+function viewFieldPage(){
+  const f = byId("fields", state.fpId);
+  if(!f) return header("Поле") + `<div class="card"><div class="empty">${dbState === "ready" ? "Поле не знайдено або його видалено." : "Завантаження…"}</div></div>`;
+  const T = state.fpTab || "summary"; const s = fieldSeason(f);
+  const parcels = S.parcels.filter(p => (p.fieldIds || []).includes(f.id));
+  const top = `<div class="top"><button class="btn menu-btn" type="button" id="menuBtn" aria-label="Меню">☰</button><div style="flex:1;min-width:200px"><h1 style="margin:0">${esc(f.name)}</h1><div class="muted">${esc(f.group || "Без групи")} · ${cropTag(s.crop)} ${esc(s.variety || "")} · ${fmt(num(f.area))} га · сезон ${state.season}</div></div>
+    <button class="btn" type="button" data-act="editField" data-id="${esc(f.id)}">Редагувати</button><button class="btn" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button><button class="btn pri" type="button" data-act="newOp" data-field="${esc(f.id)}">+ Агрооперація</button></div>`;
+  const tabs = `<div class="tabs">${FP_TABS.map(([k, l]) => `<button type="button" class="${T===k?"on":""}" data-fptab="${k}">${esc(l)}</button>`).join("")}</div>`;
+  let body = "";
+  if(T === "summary"){
+    const ops = S.ops.filter(o => o.fieldId === f.id && Number(o.season) === state.season);
+    const rs = S.scoutreports.filter(r => r.fieldId === f.id).sort((a,b) => (b.date||"").localeCompare(a.date||"")).slice(0, 5);
+    body = `<div class="grid g2"><div class="grid" style="align-content:start"><div class="card"><h2>Карта поля</h2>${mapHtml("fieldpage", [f], parcels)}</div>
+      <div class="card"><h2>Вегетація (NDVI) · сезон ${state.season}</h2><div id="ndviBox" data-fid="${esc(f.id)}">${f.contours ? `<p class="note">Завантажую супутникові дані…</p>` : `<p class="note">Потрібен контур поля.</p>`}</div></div></div>
+      <div class="grid" style="align-content:start">
+      <div class="card"><h2>Інформація про поле</h2><dl class="dl">
+        <dt>Ім’я</dt><dd>${esc(f.name)}</dd><dt>Група полів</dt><dd>${esc(f.group||"—")}</dd><dt>Культура</dt><dd>${cropTag(s.crop)}</dd><dt>Сорт / гібрид</dt><dd>${esc(s.variety||"—")}</dd>
+        <dt>Урожайність</dt><dd>${s.yield ? fmt(num(s.yield)) + " ц/га" : "—"}</dd><dt>Урожай</dt><dd>${s.yield ? fmt(num(s.yield) * num(f.area) / 10) + " т" : "—"}</dd>
+        <dt>Планова урожайність</dt><dd>${s.plannedYield ? fmt(num(s.plannedYield)) + " ц/га" : "—"}</dd><dt>Дата посіву</dt><dd>${fdate(s.sowDate)}</dd><dt>Дата збирання</dt><dd>${fdate(s.harvestDate)}</dd>
+        <dt>Площа оброблювальна</dt><dd>${fmt(num(f.area))} га</dd><dt>Офіційна</dt><dd>${f.officialArea ? fmt(num(f.officialArea)) + " га" : "—"}</dd><dt>Розрахункова</dt><dd>${f.calcArea ? fmt(num(f.calcArea)) + " га" : "—"}</dd>
+        <dt>Агрооперацій у сезоні</dt><dd>${ops.length} · виконано ${ops.filter(o => o.status === "done").length}</dd><dt>Земельних ділянок</dt><dd>${parcels.length}${parcels.length ? " · " + fmt(sum(parcels, p => p.area), 2) + " га" : ""}</dd>
+        ${f.note ? `<dt>Примітка</dt><dd>${esc(f.note)}</dd>` : ""}${f.updatedBy ? `<dt>Змінено</dt><dd>${esc(f.updatedBy)} · ${fdate((f.updatedAt||"").slice(0,10))}</dd>` : ""}</dl></div>
+      <div class="card"><h2>Погода</h2><div id="wxBox" data-fid="${esc(f.id)}">${f.contours ? `<p class="note">Завантажую погоду…</p>` : `<p class="note">Потрібен контур поля.</p>`}</div></div>
+      <div class="card"><h2>Останні звіти оглядів</h2>${rs.length ? `<div class="tw"><table><tbody>${rs.map(r => `<tr class="click" data-scout="${esc(r.id)}"><td>${fdate(r.date)}</td><td>${esc(r.stage||"")}</td><td>${(r.threats||[]).map(t => esc(nameOf("plantthreats", t.threatId)||"") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ") || esc((r.note||"").slice(0,60))}</td><td>${esc(r.author||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Оглядів ще не було.</p>`}</div>
+      </div></div>`;
+  }
+  if(T === "ops"){
+    const list = S.ops.filter(o => o.fieldId === f.id).sort((a,b) => Number(b.season) - Number(a.season) || (a.plannedFrom||"").localeCompare(b.plannedFrom||""));
+    const seasons = [...new Set(list.map(o => Number(o.season)))];
+    body = list.length ? seasons.map(se => { const l = list.filter(o => Number(o.season) === se); return `<div class="card" style="margin-bottom:12px"><h2>Сезон ${se} · ${cropTag(fieldCrop(f, se))} · ${l.length} операцій</h2><div class="tw"><table><thead><tr><th>№</th><th>Операція</th><th>Статус</th><th>План</th><th>Факт</th><th class="n">План, га</th><th class="n">Виконано, га</th><th>Внесення</th><th>Техніка</th></tr></thead><tbody>${l.map(o => { const plan = opPlanned(o), done = opDone(o), p = plan ? Math.min(100, done/plan*100) : 0;
+      return `<tr class="click" data-op="${esc(o.id)}"><td class="muted">${esc(o.number||"")}</td><td><span class="crop"><i class="dot" style="background:${GROUP_COLOR[opGroup(o)]||"#888"}"></i>${esc(opTitle(o))}</span></td><td>${statusPill(o.status)}</td><td>${fdate(o.plannedFrom)}</td><td>${o.factFrom ? fdate(o.factFrom) : "—"}</td><td class="n">${fmt(plan)}</td><td class="n">${fmt(done)}<div class="bar" style="margin-top:4px"><i style="width:${p}%"></i></div></td><td>${(o.applications||[]).map(a => esc(prodName(a.productId)) + " " + fmt(num(a.rate)) + " " + esc(a.unit||"") + "/га").join("<br>") || "—"}</td><td>${(o.machineIds||[]).map(id => esc(nameOf("machines", id))).join(", ") || "—"}</td></tr>`; }).join("")}</tbody></table></div></div>`; }).join("")
+      : `<div class="card"><div class="empty">Агрооперацій на цьому полі ще немає.</div></div>`;
+  }
+  if(T === "machines"){
+    const ts = S.tasks.filter(t => t.fieldId === f.id).sort((a,b) => (b.date + (b.start||"")).localeCompare(a.date + (a.start||"")));
+    const fu = S.fuelings.filter(x => x.fieldId === f.id);
+    body = `<div class="kpis"><div class="kpi"><b>${ts.length}</b><span>завдань техніки</span></div><div class="kpi"><b>${fmt(sum(ts, t => t.area))}</b><span>га оброблено</span></div><div class="kpi"><b>${fmt0(sum(ts, t => t.fuel) + sum(fu, x => x.liters))}</b><span>л пального</span></div><div class="kpi"><b>${fmt(sum(ts, hoursOf), 1)}</b><span>мотогодин</span></div></div>` + (ts.length ? tasksTable(ts) : `<div class="card"><div class="empty">Робіт техніки на полі ще немає.</div></div>`);
+  }
+  if(T === "yield"){
+    const years = [...new Set([...Object.keys(f.seasons || {}).map(Number), ...S.harvests.filter(h => h.fieldId === f.id).map(h => Number(h.season || (h.date||"").slice(0,4)))])].sort((a,b) => b - a);
+    const trips = S.harvests.filter(h => h.fieldId === f.id).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = `<div class="card" style="margin-bottom:16px"><h2>Урожай по роках</h2>${years.length ? `<div class="tw"><table><thead><tr><th>Сезон</th><th>Культура</th><th>Сорт</th><th class="n">План, ц/га</th><th class="n">Факт, ц/га</th><th class="n">Урожай, т</th><th class="n">Перевезено нетто, т</th><th class="n">Вологість, %</th></tr></thead><tbody>${years.map(y => { const ss = fieldSeason(f, y); const tr = trips.filter(h => Number(h.season || (h.date||"").slice(0,4)) === y); const net = sum(tr, harvNet); const wm = sum(tr, h => num(h.moisture) * harvNet(h));
+      return `<tr><td><b>${y}</b></td><td>${cropTag(ss.crop)}</td><td>${esc(ss.variety||"")}</td><td class="n">${ss.plannedYield ? fmt(num(ss.plannedYield)) : "—"}</td><td class="n">${ss.yield ? fmt(num(ss.yield)) : "—"}</td><td class="n">${ss.yield ? fmt(num(ss.yield) * num(f.area) / 10) : "—"}</td><td class="n">${net ? fmt(net / 1000) : "—"}</td><td class="n">${net && wm ? fmt(wm / net, 1) : "—"}</td></tr>`; }).join("")}</tbody></table></div>` : `<p class="note">Даних про урожай ще немає.</p>`}</div>
+    <div class="card"><h2>Перевезення врожаю з поля (${trips.length})</h2>${trips.length ? `<div class="tw"><table><thead><tr><th>Дата</th><th>Комбайн</th><th>Машина</th><th>Куди</th><th class="n">Нетто, кг</th><th class="n">Вологість</th></tr></thead><tbody>${trips.map(h => `<tr class="click" data-harv="${esc(h.id)}"><td>${fdate(h.date)} ${esc(h.loadTime||"")}</td><td>${esc(nameOf("machines", h.loaderId)||"—")}</td><td>${esc(nameOf("machines", h.vehicleId)||"—")}</td><td>${esc(nameOf("elevators", h.elevatorId) || h.unloadPlace || "—")}</td><td class="n">${fmt0(harvNet(h))}</td><td class="n">${h.moisture ? fmt(num(h.moisture), 1) : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Перевезень ще не було.</p>`}</div>`;
+  }
+  if(T === "nutrition"){
+    const r = fieldNutritionRow(f, state.season);
+    body = `<div class="kpis">${["N","P₂O₅","K₂O"].map((e, i) => { const bal = r.need ? r.applied[i] - r.need[i] : null; return `<div class="kpi"><b style="color:${bal == null ? "inherit" : bal < -10 ? "var(--bad)" : bal < 0 ? "var(--warn)" : "var(--good)"}">${bal == null ? fmt0(r.applied[i]) : (bal > 0 ? "+" : "") + fmt0(bal)}</b><span>${e}: ${bal == null ? "внесено, кг/га" : "баланс, кг/га (потреба " + fmt0(r.need[i]) + ", внесено " + fmt0(r.applied[i]) + ")"}</span></div>`; }).join("")}</div>
+    <p class="note">Культура ${esc(r.s.crop || "не вказана")}, планова урожайність ${r.s.plannedYield ? fmt(num(r.s.plannedYield)) + " ц/га" : "не вказана"}. Коефіцієнти виносу змінюються в «Планування → Плани живлення».</p>
+    ${r.lines.length ? `<div class="tw"><table><thead><tr><th>Агрооперація</th><th>Добриво</th><th class="n">Норма</th><th class="n">N, кг/га</th><th class="n">P₂O₅, кг/га</th><th class="n">K₂O, кг/га</th></tr></thead><tbody>${r.lines.map(x => `<tr class="click" data-op="${esc(x.o.id)}"><td>№${esc(x.o.number)} ${esc(opTitle(x.o))}<div class="note">${fdate(x.o.factFrom || x.o.plannedFrom)}</div></td><td>${esc(x.p.name)}</td><td class="n">${fmt(num(x.a.rate))} ${esc(x.a.unit||"")}/га</td>${x.el.map(v => `<td class="n">${v ? fmt(v, 1) : "—"}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : `<div class="card"><div class="empty">Внесень добрив із вказаним складом NPK у сезоні ще немає.</div></div>`}`;
+  }
+  if(T === "scout"){
+    const rs = S.scoutreports.filter(r => r.fieldId === f.id).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    const tk = S.scouttasks.filter(t => (t.fieldIds || []).includes(f.id));
+    body = `<div class="card" style="margin-bottom:16px"><h2>Завдання на огляд (${tk.length})</h2>${tk.length ? `<div class="tw"><table><tbody>${tk.map(t => `<tr class="click" data-scouttask="${esc(t.id)}"><td>${esc(SCOUT_STATUS[t.status||"new"][0])}</td><td>${fdate(t.due)}</td><td>${esc(t.purpose||"")}</td><td>${esc(t.assignee||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Немає.</p>`}</div>
+    <div class="card"><h2>Звіти оглядів (${rs.length})</h2>${rs.length ? `<div class="tw"><table><thead><tr><th>Дата</th><th>Фаза</th><th>Загрози</th><th>Висновки</th><th>Автор</th></tr></thead><tbody>${rs.map(r => `<tr class="click" data-scout="${esc(r.id)}"><td>${fdate(r.date)}</td><td>${esc(r.stage||"")}</td><td>${(r.threats||[]).map(t => esc(nameOf("plantthreats", t.threatId)||"") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ") || "—"}</td><td>${esc((r.note||"").slice(0,120))}</td><td>${esc(r.author||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Оглядів ще не було.</p>`}</div>`;
+  }
+  if(T === "notes"){
+    const ns = S.notes.filter(n => n.fieldId === f.id).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="fieldNote" data-id="${esc(f.id)}">+ Нотатка</button></div>${ns.length ? `<div class="tw"><table><tbody>${ns.map(n => `<tr class="click" data-note="${esc(n.id)}"><td>${fdate(n.date)}</td><td>${esc(n.category||"")}</td><td><b>${esc(n.title||"")}</b><div class="note">${esc((n.text||"").slice(0,160))}</div></td><td>${esc(n.author||"")}</td></tr>`).join("")}</tbody></table></div>` : `<div class="card"><div class="empty">Нотаток немає.</div></div>`}`;
+  }
+  if(T === "rotation"){
+    const years = []; for(let y = state.season + 1; y >= state.season - 6; y--) years.push(y);
+    body = `<div class="tw"><table><thead><tr><th>Сезон</th><th>Культура</th><th>Сорт / гібрид</th><th>Посів</th><th>Збирання</th><th class="n">План, ц/га</th><th class="n">Факт, ц/га</th><th></th></tr></thead><tbody>${years.map(y => { const ss = fieldSeason(f, y);
+      return `<tr><td><b>${y}</b>${y === state.season ? ` <span class="pill st-planned">поточний</span>` : ""}</td><td>${cropTag(ss.crop)}</td><td>${esc(ss.variety||"")}</td><td>${fdate(ss.sowDate)}</td><td>${fdate(ss.harvestDate)}</td><td class="n">${ss.plannedYield ? fmt(num(ss.plannedYield)) : "—"}</td><td class="n">${ss.yield ? fmt(num(ss.yield)) : "—"}</td><td><span class="chip" role="button" tabindex="0" data-rot="${esc(f.id)}" data-y="${y}">змінити</span></td></tr>`; }).join("")}</tbody></table></div>`;
+  }
+  if(T === "area"){
+    const ring = (f.contours || [])[0] || [];
+    body = `<div class="grid g2"><div class="card"><h2>Контур</h2>${mapHtml("fieldpage", [f], parcels)}<div class="filters" style="margin-top:10px"><button class="btn" type="button" data-act="fpRedraw" data-id="${esc(f.id)}">${f.contours ? "Перемалювати контур" : "Намалювати контур"}</button>${f.contours ? `<button class="btn" type="button" data-act="fpGeo" data-id="${esc(f.id)}">Вивантажити GeoJSON</button><button class="btn" type="button" data-act="fpKml" data-id="${esc(f.id)}">Вивантажити KML</button>` : ""}</div></div>
+      <div class="card"><h2>Площа</h2><dl class="dl"><dt>Оброблювальна</dt><dd>${fmt(num(f.area))} га</dd><dt>Офіційна</dt><dd>${f.officialArea ? fmt(num(f.officialArea)) + " га" : "—"}</dd><dt>Розрахункова (за контуром)</dt><dd>${f.calcArea ? fmt(num(f.calcArea), 4) + " га" : "—"}</dd><dt>Периметр</dt><dd>${ring.length ? fmt(perimeterKm(ring), 2) + " км" : "—"}</dd><dt>Полігонів у контурі</dt><dd>${(f.contours||[]).length}</dd><dt>Точок у контурі</dt><dd>${sum(f.contours||[], r => r.length)}</dd>${fieldCenter(f) ? `<dt>Центр поля</dt><dd>${fieldCenter(f)[1].toFixed(5)}, ${fieldCenter(f)[0].toFixed(5)}</dd>` : ""}${f.cadastre ? `<dt>Кадастрові номери</dt><dd>${esc(f.cadastre)}</dd>` : ""}</dl></div></div>`;
+  }
+  if(T === "land"){
+    body = parcels.length ? `<div class="tw"><table><thead><tr><th>Кадастровий номер</th><th class="n">Площа, га</th><th>Власник</th><th>Статус</th><th>Документ</th><th>Право до</th><th class="n">Оренда за рік, грн</th></tr></thead><tbody>${parcels.map(p => { const d = parcelActiveDoc(p);
+      return `<tr class="click" data-parcel="${esc(p.id)}"><td><b>${esc(p.cadastre||"—")}</b></td><td class="n">${fmt(num(p.area),4)}</td><td>${esc(cpName(p.ownerId)||"—")}</td><td>${esc(parcelStatus(p))}</td><td>${d ? esc(d.number||"#") + " · " + esc(d.type||"") : "—"}</td><td>${fdate(parcelRightEnd(p))}</td><td class="n">${d && RENT_DOC_TYPES.includes(d.type) ? fmt(docYearPrice(d)) : "—"}</td></tr>`; }).join("")}</tbody></table></div><p class="note">Разом ${fmt(sum(parcels, p => p.area), 4)} га у ${parcels.length} ділянках. Прив’язати ділянки можна в «Земельний банк → Аналіз земельних ресурсів».</p>`
+      : `<div class="card"><div class="empty">До поля ще не прив’язані земельні ділянки.</div></div>`;
+  }
+  if(T === "files") body = `<div class="card" id="fpFiles"><div class="body"></div></div>`;
+  return top + statusBanner() + tabs + body;
+}
+function perimeterKm(r){ let d = 0; for(let i = 1; i < r.length; i++){ const [a, b] = [r[i-1], r[i]]; const kx = 111.32 * Math.cos((a[1] + b[1]) / 2 * Math.PI / 180); d += Math.hypot((b[0] - a[0]) * kx, (b[1] - a[1]) * 110.54); } return d; }
+function downloadText(name, text, type){ const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+function fieldPageAction(a, d){
+  if(a === "fieldNote"){ noteDialog(null, { fieldId: d.id }); return true; }
+  if(a === "fpRedraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); startDraw("fieldpage", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); return true; }
+  if(a === "fpGeo"){ const f = byId("fields", d.id); downloadText(f.name + ".geojson", JSON.stringify({ type: "FeatureCollection", features: [{ type: "Feature", properties: { name: f.name, group: f.group || "", area: num(f.area) }, geometry: fieldGeom(f) }] }), "application/geo+json"); return true; }
+  if(a === "fpKml"){ const f = byId("fields", d.id); const pm = f.contours.map(r => `<Polygon><outerBoundaryIs><LinearRing><coordinates>${r.map(p => p[0] + "," + p[1]).join(" ")}</coordinates></LinearRing></outerBoundaryIs></Polygon>`).join("");
+    downloadText(f.name + ".kml", `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><name>${esc(f.name)}</name>${f.contours.length > 1 ? "<MultiGeometry>" + pm + "</MultiGeometry>" : pm}</Placemark></Document></kml>`, "application/vnd.google-earth.kml+xml"); return true; }
+  return false;
 }
 
 /* ---------- attached files ---------- */
@@ -2741,14 +2841,16 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
   main.innerHTML = (VIEWS[state.view] || viewDash)();
-  document.querySelectorAll(".rail a").forEach(a => a.classList.toggle("on", a.dataset.v === state.view));
+  document.querySelectorAll(".rail a").forEach(a => a.classList.toggle("on", a.dataset.v === (state.view === "fieldpage" ? "fields" : state.view)));
   attachMaps();
   fillNdvi();
+  { const fpf = document.getElementById("fpFiles"); if(fpf && !fpf.dataset.done){ fpf.dataset.done = "1"; attachFiles(fpf, "fields", state.fpId); } }
+  if(state.view === "fieldpage"){ const f = byId("fields", state.fpId); document.title = f ? f.name + " · КЛГ Агро Поле" : "КЛГ Агро Поле"; } else document.title = "КЛГ Агро Поле";
   { const wx = document.getElementById("wxBox"); const f = wx && byId("fields", wx.dataset.fid); if(f && f.contours){ loadWeather(f).then(w => { const el = document.getElementById("wxBox"); if(el && el.dataset.fid === f.id) el.innerHTML = weatherHtml(w, f); }).catch(() => { const el = document.getElementById("wxBox"); if(el) el.innerHTML = `<p class="note">Погода тимчасово недоступна.</p>`; }); } }
   if(focusId){ const el = document.getElementById(focusId); if(el){ el.focus(); try { if(caret!=null) el.setSelectionRange(caret, caret); } catch(e){} } }
 }
@@ -2762,7 +2864,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2786,6 +2888,7 @@ main.addEventListener("click", e => {
     if(agroAction(a, d)) return;
     if(planAction(a, d)) return;
     if(a === "newUser") return userDialog(null);
+    if(fieldPageAction(a, d)) return;
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
@@ -2802,7 +2905,8 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
-  if(d.ndvidate){ const f = byId("fields", state.fieldSel); if(f) showNdviImage(f, d.ndvidate); return; }
+  if(d.fptab){ state.fpTab = d.fptab; history.replaceState(null, "", "#field-" + state.fpId + (d.fptab === "summary" ? "" : "-" + d.fptab)); render(); window.scrollTo(0, 0); return; }
+  if(d.ndvidate){ const f = byId("fields", state.view === "fieldpage" ? state.fpId : state.fieldSel); if(f) showNdviImage(f, d.ndvidate); return; }
   if(d.user) return userDialog((USERS || []).find(u => u.id === d.user));
   if(d.plantab){ state.planTab = d.plantab; return render(); }
   if(d.agroplan) return agroplanDialog(byId("agroplans", d.agroplan));
@@ -2832,13 +2936,13 @@ main.addEventListener("click", e => {
   if(d.warehouse) return simpleDialog("warehouses", byId("warehouses", d.warehouse), "склад", warehouseFields);
   if(d.unit) return simpleDialog("units", byId("units", d.unit), "одиниця виміру", unitFields);
   if(d.stockitem){ state.wmsTab = "reports"; state.wmsRep = "turnover"; state.wmsQ = ""; return render(); }
-  if(d.fieldOpen){ state.fieldSel = d.fieldOpen; location.hash = "fields"; return; }
+  if(d.fieldOpen){ openFieldTab(d.fieldOpen); return; }
   if(d.landtab){ state.landTab = d.landtab; return render(); }
   if(d.parcel) return parcelDialog(byId("parcels", d.parcel));
   if(d.lease) return leaseDialog(byId("leases", d.lease));
   if(d.owner) return ownerDialog(byId("owners", d.owner));
   if(d.pay) return paymentDialog(byId("payments", d.pay));
-  if(d.field){ if(state.fieldSel !== d.field){ clearNdviLayer(); state.ndviShown = null; } state.fieldSel = d.field; return render(); }
+  if(d.field){ state.fieldSel = d.field; openFieldTab(d.field); return render(); }
   if(d.op) return opDialog(byId("ops", d.op));
   if(d.machine){ state.machineId = d.machine; return render(); }
   if(d.task) return taskDialog(byId("tasks", d.task));
@@ -2883,7 +2987,7 @@ document.addEventListener("keydown", e => { if(e.key === "Escape" && document.ge
 const seasonSel = document.getElementById("seasonSel");
 function fillSeasons(){ const c = curSeason(); const ys = []; for(let y=c-5; y<=c+2; y++) ys.push(y); if(!ys.includes(state.season)) ys.push(state.season); seasonSel.innerHTML = ys.sort().map(y=>opt(y, "Сезон "+y, state.season)).join(""); }
 seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("season", state.season); render(); };
-function route(){ const h = (location.hash||"").replace("#",""); state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
+function route(){ const h = (location.hash||"").replace("#",""); const fm = h.match(/^field-([A-Za-z0-9._-]+?)(?:-(summary|ops|machines|yield|nutrition|scout|notes|rotation|area|land|files))?$/); if(fm){ if(state.fpId !== fm[1]){ clearNdviLayer(); state.ndviShown = null; state.ndviAuto = null; if(MAPS.fieldpage) MAPS.fieldpage.fitted = false; } state.view = "fieldpage"; state.fpId = fm[1]; state.fieldSel = fm[1]; state.fpTab = fm[2] || state.fpTab || "summary"; } else state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
 window.addEventListener("hashchange", route);
 fillSeasons(); route();
 document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; ME = null; USERS = null; COLS.forEach(c => S[c] = []); const mb = document.getElementById("meBox"); if(mb) mb.innerHTML = ""; render(); showLogin(); };
