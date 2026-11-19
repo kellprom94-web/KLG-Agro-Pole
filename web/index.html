@@ -3,75 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>КЛГ Агро Поле</title>
+<title>AgroPulse</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <style>
 /* Layout: fixed left rail of modules, working area on the right; tables and map are the main surfaces. */
 :root{
-  --paper:#f3f5f1; --surface:#ffffff; --ink:#1c2420; --muted:#5f6b63; --line:#dde3da;
-  --accent:#2f6b4c; --accent-soft:#e3efe7; --accent-ink:#ffffff;
-  --wheat:#b9852a; --good:#2e7d4f; --warn:#b7791f; --bad:#b4413a; --info:#3a6ea5;
-  --rail:#18211c; --rail-ink:#c9d4cc; --rail-active:#2f6b4c;
-  --font:"Golos Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --r:8px; color-scheme:light;
+  --paper:#eef1f3; --surface:#ffffff; --ink:#263238; --muted:#5f6b73; --line:#e0e4e7;
+  --accent:#2e7d32; --accent-soft:#e8f5e9; --accent-ink:#ffffff; --stripe:#43a047; --link:#1976d2;
+  --wheat:#b9852a; --good:#2e7d32; --warn:#b26a00; --bad:#c62828; --info:#1976d2;
+  --rail:#2f363b; --rail-ink:#d4d9dd; --rail-active:#3a4248; --top:#ffffff; --topH:52px;
+  --font:"Roboto", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --r:4px; color-scheme:light;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --paper:#121714; --surface:#1a211d; --ink:#e4ebe6; --muted:#97a59c; --line:#2c3630;
     --accent:#5fae84; --accent-soft:#213229; --accent-ink:#0f1512;
     --wheat:#d9a54a; --good:#5fbf86; --warn:#e0a84a; --bad:#e2766e; --info:#7aa7d6;
-    --rail:#0c110e; --rail-ink:#b3c1b8; --rail-active:#2f6b4c; color-scheme:dark;
+    --rail:#0f1315; --rail-ink:#b8c0c6; --rail-active:#262d31; --top:#161b1e; --stripe:#66bb6a; --link:#64b5f6; color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
   --paper:#121714; --surface:#1a211d; --ink:#e4ebe6; --muted:#97a59c; --line:#2c3630;
   --accent:#5fae84; --accent-soft:#213229; --accent-ink:#0f1512;
   --wheat:#d9a54a; --good:#5fbf86; --warn:#e0a84a; --bad:#e2766e; --info:#7aa7d6;
-  --rail:#0c110e; --rail-ink:#b3c1b8; --rail-active:#2f6b4c; color-scheme:dark;
+  --rail:#0f1315; --rail-ink:#b8c0c6; --rail-active:#262d31; --top:#161b1e; --stripe:#66bb6a; --link:#64b5f6; color-scheme:dark;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.45}
 button,input,select,textarea{font:inherit;color:inherit}
-.app{display:grid;grid-template-columns:220px 1fr;min-height:100%}
-.rail{background:var(--rail);color:var(--rail-ink);padding:16px 10px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh;overflow:auto}
-.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 14px;color:#fff;font-weight:700;font-size:16px}
+.topbar{position:sticky;top:0;z-index:12;height:var(--topH);background:var(--top);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 16px}
+.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:700;font-size:18px;min-width:200px;text-decoration:none}
 .brand svg{flex:none}
-.brand small{display:block;font-weight:400;font-size:11px;color:var(--rail-ink);opacity:.8}
-.rail a{display:flex;align-items:center;gap:10px;color:var(--rail-ink);text-decoration:none;padding:8px 10px;border-radius:6px;font-weight:500}
-.rail a:hover{background:rgba(255,255,255,.06)}
-.rail a.on{background:var(--rail-active);color:#fff}
-.rail .sec{font-size:11px;text-transform:uppercase;letter-spacing:.06em;opacity:.55;padding:12px 10px 4px}
-.rail .season{margin-top:auto;padding:10px;border-top:1px solid rgba(255,255,255,.08);display:grid;gap:6px;font-size:12px}
-.rail .season select{background:#243029;border:1px solid #33433a;color:#fff;border-radius:6px;padding:6px}
+.topbar .org{margin-left:auto;font-size:13px;color:var(--muted)}
+.topbar .ava{width:32px;height:32px;border-radius:50%;background:var(--stripe);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:500;flex:none}
+.app{display:grid;grid-template-columns:230px 1fr;min-height:calc(100% - var(--topH))}
+.rail{background:var(--rail);color:var(--rail-ink);padding:6px 0 12px;display:flex;flex-direction:column;position:sticky;top:var(--topH);height:calc(100vh - var(--topH));overflow:auto}
+.rail a{display:flex;align-items:center;gap:10px;color:var(--rail-ink);text-decoration:none;padding:8px 18px;font-weight:400}
+.rail a:hover{background:rgba(255,255,255,.06);color:#fff}
+.rail a.on{background:var(--rail-active);color:#fff;box-shadow:inset 3px 0 0 var(--stripe)}
+.rail .sec{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#8a949c;padding:14px 18px 6px}
+.rail .season{margin-top:auto;padding:12px 18px;border-top:1px solid rgba(255,255,255,.08);display:grid;gap:6px;font-size:12px}
+.rail .season select{background:#3a4248;border:1px solid #4a535a;color:#fff;border-radius:4px;padding:6px}
 main{padding:20px 24px 60px;min-width:0}
 .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
-.top h1{font-size:22px;margin:0;text-wrap:balance;font-weight:700}
+.top h1{font-size:20px;margin:0;text-wrap:balance;font-weight:500}
 .top .sp{flex:1}
-.btn{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn{border:1px solid #cfd6db;background:var(--surface);border-radius:4px;padding:0 14px;min-height:36px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .btn:hover{border-color:var(--accent)}
 .btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.pri:hover{filter:brightness(1.07)}
 .btn.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
-.btn.sm{padding:4px 8px;font-size:12px}
+.btn.sm{padding:0 9px;min-height:28px;font-size:12px}
 .btn:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
-.card h2{font-size:15px;margin:0 0 12px;font-weight:600}
+.card h2{font-size:15px;margin:0 0 12px;font-weight:500}
 .grid{display:grid;gap:16px}
 .g2{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
 .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
-.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums;font-weight:700}
+.kpi b{display:block;font-size:24px;font-variant-numeric:tabular-nums;font-weight:500}
 .kpi span{color:var(--muted);font-size:12px}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-th{font-size:12px;color:var(--muted);font-weight:600;background:color-mix(in srgb,var(--paper) 60%,var(--surface));position:sticky;top:0;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:500;background:#f5f7f8;position:sticky;top:0;white-space:nowrap}
 td.n,th.n{text-align:right;white-space:nowrap}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--accent-soft)}
@@ -91,8 +93,8 @@ tr:last-child td{border-bottom:0}
 .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
 .filters input,.filters select,.f input,.f select,.f textarea{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:7px 9px;min-width:0}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
-.tabs button{border:0;background:none;padding:8px 12px;cursor:pointer;color:var(--muted);font-weight:600;border-bottom:2px solid transparent}
-.tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+.tabs button{border:0;background:none;padding:10px 14px;cursor:pointer;color:var(--muted);font-weight:500;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--stripe)}
 .empty{padding:28px;text-align:center;color:var(--muted)}
 .empty b{display:block;color:var(--ink);font-size:15px;margin-bottom:6px}
 .map{position:relative;background:color-mix(in srgb,var(--paper) 50%,var(--surface));border:1px solid var(--line);border-radius:var(--r);overflow:hidden;height:440px;touch-action:none}
@@ -108,7 +110,7 @@ tr:last-child td{border-bottom:0}
 .map .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);padding:6px 8px;border-radius:6px;font-size:12px;display:none;max-width:240px;z-index:2}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:12px}
 .overlay{position:fixed;inset:0;background:rgba(10,15,12,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:20}
-.modal{background:var(--surface);border-radius:10px;border:1px solid var(--line);width:min(720px,100%);box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal{background:var(--surface);border-radius:6px;border:1px solid var(--line);width:min(720px,100%);box-shadow:0 20px 60px rgba(0,0,0,.25)}
 .modal.wide{width:min(980px,100%)}
 .modal header{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);gap:10px}
 .modal header h3{margin:0;font-size:16px;flex:1}
@@ -148,30 +150,35 @@ tr:last-child td{border-bottom:0}
 .mapnote{position:absolute;top:50px;left:10px;z-index:2;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;max-width:280px}
 .filedrop{border:1.5px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--muted);margin:6px 0}
 .filedrop.over{border-color:var(--accent);background:var(--accent-soft)}
-.linkish{color:var(--accent);cursor:pointer;text-decoration:underline}
+.linkish{color:var(--link);cursor:pointer;text-decoration:underline}
 .filerow{display:flex;gap:10px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .filerow a:first-child{flex:1;min-width:160px;color:var(--ink)}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
-  .rail{position:fixed;inset:0 auto 0 0;width:240px;z-index:15;transform:translateX(-100%);transition:transform .2s}
+  .rail{position:fixed;inset:var(--topH) auto 0 0;height:auto;width:250px;z-index:15;transform:translateX(-100%);transition:transform .2s}
+  .brand{min-width:0} .topbar .org{display:none} .topbar .ava{margin-left:auto}
   .rail.open{transform:none}
   .menu-btn{display:inline-flex}
   main{padding:14px 16px 60px}
   .g2,.g3{grid-template-columns:1fr}
   .map{height:340px} .mapbox{height:380px}
 }
+main a:not(.btn){color:var(--link)}
+:root[data-theme="dark"] th{background:#1d2427}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) th{background:#1d2427}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
+<header class="topbar">
+  <a class="brand" href="#dash" aria-label="AgroPulse — на головну"><svg width="30" height="30" viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="7" fill="#43a047"/><path d="M5 18h6l3-8 4 15 3-10 2 3h6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>AgroPulse</a>
+  <span class="org">ТОВ «КЛГ Агро»</span><span class="ava" id="topAva" aria-hidden="true">А</span>
+</header>
 <div class="app">
   <nav class="rail" id="rail" aria-label="Розділи">
-    <div class="brand">
-      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="6" fill="#2f6b4c"/><path d="M5 20 L11 9 L15 15 L18 11 L23 20 Z" fill="#b9852a"/><path d="M5 20h18" stroke="#fff" stroke-width="2"/></svg>
-      <div>КЛГ Агро<small>Поле і техніка</small></div>
-    </div>
+    <div class="sec">Моніторинг</div>
     <a href="#dash" data-v="dash">Центр моніторингу</a>
-    <div class="sec">Агро</div>
+    <div class="sec">Виробництво</div>
     <a href="#fields" data-v="fields">Поля і карта</a>
     <a href="#rotation" data-v="rotation">Сівозміна</a>
     <a href="#ops" data-v="ops">Агрооперації</a>
@@ -183,7 +190,7 @@ tr:last-child td{border-bottom:0}
     <a href="#service" data-v="service">Обслуговування</a>
     <a href="#fuel" data-v="fuel">Паливо</a>
     <a href="#harvest" data-v="harvest">Перевезення врожаю</a>
-    <div class="sec">Інше</div>
+    <div class="sec">Облік</div>
     <a href="#econ" data-v="econ">Економіка</a>
     <a href="#land" data-v="land">Земельний банк</a>
     <a href="#wms" data-v="wms">Склад</a>
@@ -339,7 +346,7 @@ async function remove(col, id){
 function showLogin(){
   if(document.getElementById("login")) return;
   const w = document.createElement("div"); w.id = "login"; w.className = "overlay"; w.style.zIndex = 40;
-  w.innerHTML = `<form class="modal" style="width:min(380px,100%)"><header><h3>Вхід у КЛГ Агро Поле</h3></header><div class="body"><div class="f"><label class="full">Логін<input id="llg" autocomplete="username" value="${esc(lsGet("login") || "admin")}"></label><label class="full">Пароль<input type="password" id="lpw" autocomplete="current-password" required></label></div><div class="note" id="lerr"></div></div><footer><span class="sp"></span><button class="btn pri" type="submit">Увійти</button></footer></form>`;
+  w.innerHTML = `<form class="modal" style="width:min(380px,100%)"><header><h3>Вхід у AgroPulse</h3></header><div class="body"><div class="f"><label class="full">Логін<input id="llg" autocomplete="username" value="${esc(lsGet("login") || "admin")}"></label><label class="full">Пароль<input type="password" id="lpw" autocomplete="current-password" required></label></div><div class="note" id="lerr"></div></div><footer><span class="sp"></span><button class="btn pri" type="submit">Увійти</button></footer></form>`;
   document.body.appendChild(w);
   w.querySelector("form").onsubmit = async e => {
     e.preventDefault();
@@ -2573,6 +2580,7 @@ function canWriteCol(col){ if(!ME) return true; return ME.write === "*" || (ME.w
 async function loadMe(){
   try { ME = await api("/me"); } catch(e){ ME = null; }
   const box = document.getElementById("meBox");
+  const av = document.getElementById("topAva"); if(av && ME) av.textContent = (ME.name || "А").trim().charAt(0).toUpperCase();
   if(box && ME) box.innerHTML = `<div style="color:#fff;font-weight:600">${esc(ME.name)}</div><div style="opacity:.7">${esc(ME.roles[ME.role] || ME.role)}</div>${ME.builtin ? "" : `<button class="btn sm" type="button" id="pwBtn" style="background:transparent;color:var(--rail-ink);border-color:#33433a">Змінити пароль</button>`}`;
   const pw = document.getElementById("pwBtn"); if(pw) pw.onclick = passwordDialog;
   const ul = document.getElementById("usersLink"); if(ul) ul.hidden = !(ME && ME.role === "admin");
@@ -2862,7 +2870,7 @@ async function aoCreateFields(){
   const have = new Set(); S.fields.forEach(f => aoKeys(f).forEach(k => have.add(k)));
   const groups = {}; S.aofields.forEach(a => { const k = aoNorm(a.name); if(!k || have.has(k)) return; (groups[k] ||= []).push(a); });
   const list = Object.values(groups); if(!list.length){ toast("Усі поля вже є"); return; }
-  confirmBox(`Створити в КЛГ Поле ${list.length} полів з АгроОбліку?`, async () => {
+  confirmBox(`Створити в AgroPulse ${list.length} полів з АгроОбліку?`, async () => {
     let n = 0; toast("Створюю поля…");
     for(const rs of list){
       rs.sort((a, b) => String(b.season).localeCompare(String(a.season)) || (String(a.name).includes(" · ") ? 1 : -1));
@@ -2876,7 +2884,7 @@ async function aoCreateFields(){
 let AOI = null;
 async function loadAo(){ try { AOI = await api("/ao/info"); } catch(e){ AOI = { error: true }; } render(); }
 function viewAgrooblik(){
-  const H = header("АгроОблік → КЛГ Поле");
+  const H = header("АгроОблік → AgroPulse");
   if(!ME || ME.role !== "admin") return H + `<div class="card"><div class="empty">Розділ доступний лише адміністратору.</div></div>`;
   if(AOI == null){ loadAo(); return H + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
   const c = AOI.collections || {}; const ls = AOI.last_sync;
@@ -2884,12 +2892,12 @@ function viewAgrooblik(){
   const aoNames = [...new Map(S.aofields.map(a => [aoNorm(a.name), a])).values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
   const unm = aoNames.filter(a => !matched.has(aoNorm(a.name)));
   return H + `<div class="kpis"><div class="kpi"><b>${ls ? fdate(ls.slice(0,10)) + " " + ls.slice(11,16) : "—"}</b><span>останнє надходження (UTC)</span></div><div class="kpi"><b>${fmt0((c.waybills||{}).count||0)}</b><span>шляхових листів</span></div><div class="kpi"><b>${fmt0((c.lzk||{}).count||0)}</b><span>лімітно-забірних карт</span></div><div class="kpi"><b>${fmt0((c.fields||{}).count||0)}</b><span>полів АгроОбліку</span></div></div>
-  <div class="card"><h2>Як це працює</h2><p>АгроОблік лишається окремою програмою в Claude. Дані з нього (шляхові листи, лімітно-забірні карти, поля, номенклатура) АгроОблік сам надсилає через конектор «КЛГ Агро Поле», коли його відкрито у вас (при відкритті й далі кожні 10 хвилин). На сторінці кожного поля вони видні на вкладці «АгроОблік». Тут дані лише для перегляду: змінюйте їх в АгроОбліку.</p>
-  <p><b>Адреса конектора</b> (Claude → Налаштування → Конектори → Додати власний конектор). Під час підключення відкриється сторінка входу КЛГ Поле: увійдіть як адміністратор і натисніть «Дозволити».</p>
+  <div class="card"><h2>Як це працює</h2><p>АгроОблік лишається окремою програмою в Claude. Дані з нього (шляхові листи, лімітно-забірні карти, поля, номенклатура) АгроОблік сам надсилає через конектор «AgroPulse», коли його відкрито у вас (при відкритті й далі кожні 10 хвилин). На сторінці кожного поля вони видні на вкладці «АгроОблік». Тут дані лише для перегляду: змінюйте їх в АгроОбліку.</p>
+  <p><b>Адреса конектора</b> (Claude → Налаштування → Конектори → Додати власний конектор). Під час підключення відкриється сторінка входу AgroPulse: увійдіть як адміністратор і натисніть «Дозволити».</p>
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><code id="aoUrl" style="word-break:break-all;background:var(--soft,#f3f5f2);padding:6px 8px;border-radius:6px">${esc(AOI.url || "")}</code><button class="btn sm" type="button" data-act="aoCopy">Копіювати</button><button class="btn sm" type="button" data-act="aoReload">Оновити</button></div></div>
   <div class="card" style="margin-top:16px"><h2>Відповідність полів</h2><p class="note">Поля зіставляються за назвою (частина після «·» не враховується). Якщо в АгроОбліку поле називається інакше, допишіть ту назву; кілька назв — через кому.</p>
-  <div class="tw"><table><thead><tr><th>Поле в КЛГ Поле</th><th class="n">Га</th><th>Інші назви в АгроОбліку</th><th class="n">Шляхових</th><th class="n">ЛЗК</th></tr></thead><tbody>${S.fields.filter(f => !f.archived).sort((a, b) => (a.name||"").localeCompare(b.name||"", "uk")).map(f => { const d = aoFieldData(f); return `<tr><td>${esc(f.name)}</td><td class="n">${fmt(num(f.area))}</td><td><input data-aonames="${esc(f.id)}" value="${esc(f.aoNames || "")}" placeholder="напр. 40 Вовочка" style="min-width:220px"></td><td class="n">${d.wb.length || "—"}</td><td class="n">${d.lz.length || "—"}</td></tr>`; }).join("")}</tbody></table></div>
-  ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p><button class="btn pri" type="button" data-act="aoCreate">Створити ці поля в КЛГ Поле (${unm.length})</button> <span class="note">Назва, площа, відділення (як група) і культури за сезонами. Контури можна домалювати або завантажити потім.</span></p><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
+  <div class="tw"><table><thead><tr><th>Поле в AgroPulse</th><th class="n">Га</th><th>Інші назви в АгроОбліку</th><th class="n">Шляхових</th><th class="n">ЛЗК</th></tr></thead><tbody>${S.fields.filter(f => !f.archived).sort((a, b) => (a.name||"").localeCompare(b.name||"", "uk")).map(f => { const d = aoFieldData(f); return `<tr><td>${esc(f.name)}</td><td class="n">${fmt(num(f.area))}</td><td><input data-aonames="${esc(f.id)}" value="${esc(f.aoNames || "")}" placeholder="напр. 40 Вовочка" style="min-width:220px"></td><td class="n">${d.wb.length || "—"}</td><td class="n">${d.lz.length || "—"}</td></tr>`; }).join("")}</tbody></table></div>
+  ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p><button class="btn pri" type="button" data-act="aoCreate">Створити ці поля в AgroPulse (${unm.length})</button> <span class="note">Назва, площа, відділення (як група) і культури за сезонами. Контури можна домалювати або завантажити потім.</span></p><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
 }
 
 /* ---------- Telegram notifications ---------- */
@@ -2901,7 +2909,7 @@ function viewTelegram(){
   if(TGI == null){ loadTg(); return H + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
   const admin = ME && ME.role === "admin";
   if(!TGI.configured) return H + `<div class="card"><h2>Бот ще не підключено</h2>${admin ? `<ol style="line-height:1.7">
-    <li>У Telegram відкрийте <b>@BotFather</b>, надішліть <code>/newbot</code>, задайте назву (напр. «КЛГ Агро Поле») та ім’я, що закінчується на <code>bot</code>.</li>
+    <li>У Telegram відкрийте <b>@BotFather</b>, надішліть <code>/newbot</code>, задайте назву (напр. «AgroPulse») та ім’я, що закінчується на <code>bot</code>.</li>
     <li>BotFather надішле токен виду <code>123456:ABC…</code>. Нікому його не пересилайте.</li>
     <li>Cloudflare → Workers &amp; Pages → <b>klg-agro-pole</b> → Settings → Variables and Secrets → Add: тип <b>Secret</b>, назва <code>TELEGRAM_BOT_TOKEN</code>, значення — токен. Deploy.</li>
     <li>Оновіть цю сторінку й натисніть «Підключити бота».</li></ol>` : `<div class="empty">Попросіть адміністратора підключити бота.</div>`}</div>`;
@@ -3104,7 +3112,7 @@ function render(){
   attachMaps();
   fillNdvi();
   { const fpf = document.getElementById("fpFiles"); if(fpf && !fpf.dataset.done){ fpf.dataset.done = "1"; attachFiles(fpf, "fields", state.fpId); } }
-  if(state.view === "fieldpage"){ const f = byId("fields", state.fpId); document.title = f ? f.name + " · КЛГ Агро Поле" : "КЛГ Агро Поле"; } else document.title = "КЛГ Агро Поле";
+  if(state.view === "fieldpage"){ const f = byId("fields", state.fpId); document.title = f ? f.name + " · AgroPulse" : "AgroPulse"; } else document.title = "AgroPulse";
   { const wx = document.getElementById("wxBox"); const f = wx && byId("fields", wx.dataset.fid); if(f && f.contours){ loadWeather(f).then(w => { const el = document.getElementById("wxBox"); if(el && el.dataset.fid === f.id) el.innerHTML = weatherHtml(w, f); }).catch(() => { const el = document.getElementById("wxBox"); if(el) el.innerHTML = `<p class="note">Погода тимчасово недоступна.</p>`; }); } }
   if(focusId){ const el = document.getElementById(focusId); if(el){ el.focus(); try { if(caret!=null) el.setSelectionRange(caret, caret); } catch(e){} } }
 }

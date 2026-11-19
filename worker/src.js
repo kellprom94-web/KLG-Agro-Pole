@@ -1,4 +1,4 @@
-// КЛГ Агро Поле — Cloudflare Worker: serves the app page and a small document API on D1.
+// AgroPulse — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
 const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs", "aofields", "aowaybills", "aolzk", "aoitems"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -250,7 +250,7 @@ async function handleApi(req, env, url) {
     if (user.role !== "admin") return forbid();
     const mode = url.searchParams.get("mode") === "replace" ? "replace" : "merge";
     let snap; try { snap = await req.json(); } catch (e) { return json({ error: "Файл не є резервною копією" }, 400); }
-    if (!snap || snap.app !== "klg-agro-pole" || !Array.isArray(snap.docs)) return json({ error: "Файл не є резервною копією КЛГ Агро Поле" }, 400);
+    if (!snap || snap.app !== "klg-agro-pole" || !Array.isArray(snap.docs)) return json({ error: "Файл не є резервною копією AgroPulse" }, 400);
     await makeBackup(env, "before-restore", user.name);
     const updated = new Date().toISOString(); const stmts = []; const keep = new Set();
     for (const d of snap.docs) { if (!COLS.has(d.col) || !ID_RE.test(String(d.id || "")) || !d.data || typeof d.data !== "object") continue; keep.add(d.col + "|" + d.id);
@@ -478,7 +478,7 @@ async function sendDigests(env, onlyChat) {
   let sent = 0;
   for (const l of links) {
     const parts = (ROLE_SECTIONS[l.role] || []).map((k) => (k === "wx" ? wx : sec[k])).filter(Boolean);
-    const text = `<b>КЛГ Агро Поле · ${fd(kyivToday())}</b>\n\n` + (parts.length ? parts.join("\n\n") : "Усе спокійно: термінових подій немає ✅");
+    const text = `<b>AgroPulse · ${fd(kyivToday())}</b>\n\n` + (parts.length ? parts.join("\n\n") : "Усе спокійно: термінових подій немає ✅");
     const r = await tgSend(env, l.chat_id, text.slice(0, 4000)); if (r.ok) sent++;
   }
   return sent;
@@ -497,7 +497,7 @@ async function handleTgHook(req, env) {
     await tgSend(env, chat, `Готово, ${tgEsc(c.name)}! Щоранку о 7:00 надсилатиму зведення для ролі «${tgEsc((ROLES[c.role] || {}).name || c.role)}».\n\n/digest — зведення зараз\n/stop — відписатися`);
   } else if (/^\/stop/.test(text)) { await env.DB.prepare("DELETE FROM tg_links WHERE chat_id = ?").bind(String(chat)).run(); await tgSend(env, chat, "Сповіщення вимкнено. Підключитися знову можна з програми."); }
   else if (/^\/digest/.test(text)) { const n = await sendDigests(env, chat); if (!n) await tgSend(env, chat, "Цей чат ще не підключено. Отримайте код у програмі: меню внизу → «Telegram»."); }
-  else await tgSend(env, chat, "Щоб підключити сповіщення, відкрийте програму КЛГ Агро Поле → меню внизу → «Telegram» і натисніть посилання з кодом.\n\n/digest — зведення зараз\n/stop — відписатися");
+  else await tgSend(env, chat, "Щоб підключити сповіщення, відкрийте програму AgroPulse → меню внизу → «Telegram» і натисніть посилання з кодом.\n\n/digest — зведення зараз\n/stop — відписатися");
   return new Response("ok");
 }
 
@@ -542,8 +542,8 @@ async function aoPush(env, a) {
   return { collection: a.collection, received: recs.length, saved: st.length, skipped: bad, removed };
 }
 const AO_TOOLS = [
-  { name: "agrooblik_status", description: "Стан даних АгроОбліку в програмі КЛГ Поле: скільки записів кожної колекції вже отримано і найбільше значення поля ts (для інкрементальної синхронізації: надсилайте записи з ts більшим за max_ts).", inputSchema: { type: "object", properties: {} } },
-  { name: "agrooblik_push", description: "Записати в КЛГ Поле записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку. all_ids: повний список id колекції в АгроОбліку (можна надіслати з порожнім records окремим викликом після всіх частин) — усе, чого в ньому немає, буде позначено видаленим. Надсилайте не більше 500 записів за виклик.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } }, all_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
+  { name: "agrooblik_status", description: "Стан даних АгроОбліку в програмі AgroPulse: скільки записів кожної колекції вже отримано і найбільше значення поля ts (для інкрементальної синхронізації: надсилайте записи з ts більшим за max_ts).", inputSchema: { type: "object", properties: {} } },
+  { name: "agrooblik_push", description: "Записати в AgroPulse записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку. all_ids: повний список id колекції в АгроОбліку (можна надіслати з порожнім records окремим викликом після всіх частин) — усе, чого в ньому немає, буде позначено видаленим. Надсилайте не більше 500 записів за виклик.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } }, all_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
 ];
 async function handleMcp(req, env) {
   if (req.method === "GET") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
@@ -552,7 +552,7 @@ async function handleMcp(req, env) {
   const one = async (m) => {
     if (m.id === undefined || m.id === null) return null;
     const ok = (result) => ({ jsonrpc: "2.0", id: m.id, result }), err = (code, message) => ({ jsonrpc: "2.0", id: m.id, error: { code, message } });
-    if (m.method === "initialize") return ok({ protocolVersion: (m.params && m.params.protocolVersion) || "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "klg-agro-pole", title: "КЛГ Агро Поле", version: "1.0.0" }, instructions: "Конектор програми КЛГ Агро Поле. Приймає дані з артефакту АгроОблік (шляхові листи, лімітно-забірні карти, поля, номенклатура), щоб вони автоматично з'являлися на полях." });
+    if (m.method === "initialize") return ok({ protocolVersion: (m.params && m.params.protocolVersion) || "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "klg-agro-pole", title: "AgroPulse", version: "1.0.0" }, instructions: "Конектор програми AgroPulse. Приймає дані з артефакту АгроОблік (шляхові листи, лімітно-забірні карти, поля, номенклатура), щоб вони автоматично з'являлися на полях." });
     if (m.method === "ping") return ok({});
     if (m.method === "tools/list") return ok({ tools: AO_TOOLS });
     if (m.method === "tools/call") {
@@ -593,7 +593,7 @@ function oaPage(title, body) {
 async function handleOAuth(req, env, url) {
   const o = url.origin, p = url.pathname;
   if (req.method === "OPTIONS") return oaJson({}, 204);
-  if (p.startsWith("/.well-known/oauth-protected-resource")) return oaJson({ resource: o + "/mcp", authorization_servers: [o], bearer_methods_supported: ["header"], resource_name: "КЛГ Агро Поле" });
+  if (p.startsWith("/.well-known/oauth-protected-resource")) return oaJson({ resource: o + "/mcp", authorization_servers: [o], bearer_methods_supported: ["header"], resource_name: "AgroPulse" });
   if (p.startsWith("/.well-known/oauth-authorization-server") || p.startsWith("/.well-known/openid-configuration"))
     return oaJson({ issuer: o, authorization_endpoint: o + "/oauth/authorize", token_endpoint: o + "/oauth/token", registration_endpoint: o + "/oauth/register", response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], scopes_supported: ["agrooblik"] });
   if (p.startsWith("/.well-known/")) return oaJson({ error: "not_found" }, 404);
@@ -624,7 +624,7 @@ async function handleOAuth(req, env, url) {
         return new Response(null, { status: 302, headers: { location: back.toString(), "cache-control": "no-store" } });
       }
     }
-    return oaPage("Підключення Claude", `<form method="post" action="/oauth/authorize">${hidden}<h1>КЛГ Агро Поле</h1><p class="n">Claude просить дозвіл записувати в програму дані з АгроОбліку (шляхові листи, лімітно-забірні карти, поля, номенклатуру). Увійдіть як адміністратор, щоб дозволити.</p>${err ? `<div class="e">${err}</div>` : ""}<input name="login" placeholder="Логін" value="admin" autocomplete="username"><input name="password" type="password" placeholder="Пароль" autocomplete="current-password" autofocus><button type="submit">Дозволити</button></form>`);
+    return oaPage("Підключення Claude", `<form method="post" action="/oauth/authorize">${hidden}<h1>AgroPulse</h1><p class="n">Claude просить дозвіл записувати в програму дані з АгроОбліку (шляхові листи, лімітно-забірні карти, поля, номенклатуру). Увійдіть як адміністратор, щоб дозволити.</p>${err ? `<div class="e">${err}</div>` : ""}<input name="login" placeholder="Логін" value="admin" autocomplete="username"><input name="password" type="password" placeholder="Пароль" autocomplete="current-password" autofocus><button type="submit">Дозволити</button></form>`);
   }
   if (p === "/oauth/token" && req.method === "POST") {
     const ct = req.headers.get("content-type") || ""; const q = ct.includes("json") ? new URLSearchParams(Object.entries(await req.json().catch(() => ({})))) : new URLSearchParams(await req.text());
