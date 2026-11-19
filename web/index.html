@@ -146,6 +146,11 @@ tr:last-child td{border-bottom:0}
 .drawbar button.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .maplibregl-popup-content{font-family:var(--font);font-size:12px;color:#1c2420;padding:8px 10px}
 .mapnote{position:absolute;top:50px;left:10px;z-index:2;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;max-width:280px}
+.filedrop{border:1.5px dashed var(--line);border-radius:8px;padding:14px;text-align:center;color:var(--muted);margin:6px 0}
+.filedrop.over{border-color:var(--accent);background:var(--accent-soft)}
+.linkish{color:var(--accent);cursor:pointer;text-decoration:underline}
+.filerow{display:flex;gap:10px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.filerow a:first-child{flex:1;min-width:160px;color:var(--ink)}
 @media (max-width:900px){
   .app{grid-template-columns:1fr}
   .rail{position:fixed;inset:0 auto 0 0;width:240px;z-index:15;transform:translateX(-100%);transition:transform .2s}
@@ -2021,6 +2026,27 @@ function wmsAction(a, d){
   return false;
 }
 
+/* ---------- attached files ---------- */
+const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
+async function attachFiles(m, col, id){
+  if(!m || !id) return;
+  const box = document.createElement("div");
+  box.innerHTML = `<b>Прикріплені файли</b><div class="filedrop" tabindex="0">Перетягніть файли сюди або <label class="linkish">оберіть<input type="file" multiple hidden></label> (до 20 МБ кожен)</div><div class="filelist note">Завантаження списку…</div>`;
+  m.querySelector(".body").appendChild(box);
+  const list = box.querySelector(".filelist"), drop = box.querySelector(".filedrop"), input = box.querySelector("input[type=file]");
+  const load = async () => { try { const j = await api("/files?col=" + col + "&id=" + encodeURIComponent(id)); list.innerHTML = j.files.length ? j.files.map(f => `<div class="filerow"><a href="/api/files/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a><span class="muted">${fmtSize(f.size)} · ${fdate((f.created||"").slice(0,10))}</span><a class="muted" href="/api/files/${f.id}?download=1">завантажити</a><button class="btn sm danger" type="button" data-fdel="${f.id}">×</button></div>`).join("") : "Файлів немає."; } catch(e){ list.textContent = "Не вдалося отримати список файлів."; } };
+  const upload = async files => { for(const f of files){ if(f.size > 20 * 1048576){ toast(f.name + ": більше 20 МБ"); continue; } list.insertAdjacentHTML("afterbegin", `<div class="note">Завантажую ${esc(f.name)}…</div>`);
+      const r = await fetch("/api/files?col=" + col + "&id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(f.name), { method: "POST", headers: { "content-type": f.type || "application/octet-stream" }, body: f });
+      if(!r.ok) toast("Не вдалося завантажити " + f.name); } load(); };
+  input.onchange = () => upload([...input.files]);
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); upload([...e.dataTransfer.files]); });
+  list.addEventListener("click", e => { const fid = e.target.dataset && e.target.dataset.fdel; if(fid) confirmBox("Видалити файл?", async () => { await fetch("/api/files/" + fid, { method: "DELETE" }); load(); }); });
+  load();
+}
+function lastModal(){ return document.querySelector("#modalRoot .modal"); }
+
 /* ---------- demo data ---------- */
 async function makeDemo(){
   const D = { demo: true };
@@ -2169,6 +2195,11 @@ main.addEventListener("change", e => {
 document.addEventListener("click", e => { if(e.target.id === "menuBtn") document.getElementById("rail").classList.toggle("open"); else if(!e.target.closest("#rail")) document.getElementById("rail").classList.remove("open"); });
 document.addEventListener("keydown", e => { if(e.key === "Escape" && document.getElementById("modalRoot").innerHTML) closeModal(); });
 
+/* attach the files block to dialogs of saved records */
+[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["opDialog","ops"]].forEach(([fn, col]) => {
+  const orig = window[fn];
+  window[fn] = function(rec, ...rest){ const r = orig.call(this, rec, ...rest); if(rec && rec.id) attachFiles(lastModal(), col, rec.id); return r; };
+});
 const seasonSel = document.getElementById("seasonSel");
 function fillSeasons(){ const c = curSeason(); const ys = []; for(let y=c-5; y<=c+2; y++) ys.push(y); if(!ys.includes(state.season)) ys.push(state.season); seasonSel.innerHTML = ys.sort().map(y=>opt(y, "Сезон "+y, state.season)).join(""); }
 seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("season", state.season); render(); };

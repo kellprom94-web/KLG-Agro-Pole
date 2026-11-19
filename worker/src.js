@@ -53,6 +53,40 @@ async function handleApi(req, env, url) {
     const { results } = await env.DB.prepare("SELECT col, id, data, updated, deleted FROM docs WHERE updated > ?").bind(since).all();
     return json({ now, docs: results.map(rowOut) });
   }
+  if (path === "/api/files" && req.method === "GET") {
+    const col = url.searchParams.get("col") || "", id = url.searchParams.get("id") || "";
+    const { results } = await env.DB.prepare("SELECT id, name, type, size, created FROM files WHERE col = ? AND doc = ? ORDER BY created").bind(col, id).all();
+    return json({ files: results });
+  }
+  if (path === "/api/files" && req.method === "POST") {
+    const col = url.searchParams.get("col") || "", id = url.searchParams.get("id") || "";
+    const name = (url.searchParams.get("name") || "file").slice(0, 200);
+    if (!COLS.has(col) || !ID_RE.test(id)) return json({ error: "bad target" }, 400);
+    const buf = new Uint8Array(await req.arrayBuffer());
+    if (!buf.length) return json({ error: "empty file" }, 400);
+    if (buf.length > 20 * 1024 * 1024) return json({ error: "file larger than 20 MB" }, 413);
+    const fid = crypto.randomUUID();
+    const type = (req.headers.get("content-type") || "application/octet-stream").slice(0, 100);
+    const created = new Date().toISOString();
+    const CH = 512 * 1024; const stmts = [env.DB.prepare("INSERT INTO files (id, col, doc, name, type, size, created) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(fid, col, id, name, type, buf.length, created)];
+    for (let i = 0, n = 0; i < buf.length; i += CH, n++) stmts.push(env.DB.prepare("INSERT INTO file_chunks (file_id, idx, data) VALUES (?, ?, ?)").bind(fid, n, buf.slice(i, i + CH).buffer));
+    for (let i = 0; i < stmts.length; i += 10) await env.DB.batch(stmts.slice(i, i + 10));
+    return json({ ok: true, file: { id: fid, name, type, size: buf.length, created } });
+  }
+  const fm = path.match(/^\/api\/files\/([0-9a-f-]{36})$/);
+  if (fm && req.method === "GET") {
+    const f = await env.DB.prepare("SELECT name, type, size FROM files WHERE id = ?").bind(fm[1]).first();
+    if (!f) return json({ error: "not found" }, 404);
+    const { results } = await env.DB.prepare("SELECT data FROM file_chunks WHERE file_id = ? ORDER BY idx").bind(fm[1]).all();
+    const parts = results.map((r) => new Uint8Array(r.data));
+    const out = new Uint8Array(parts.reduce((t, p) => t + p.length, 0)); let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+    const dl = url.searchParams.get("download") ? "attachment" : "inline";
+    return new Response(out, { headers: { "content-type": f.type, "content-length": String(out.length), "cache-control": "private, max-age=3600", "content-disposition": dl + "; filename*=UTF-8''" + encodeURIComponent(f.name), "x-content-type-options": "nosniff" } });
+  }
+  if (fm && req.method === "DELETE") {
+    await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
+    return json({ ok: true });
+  }
   if (path === "/api/wms" && req.method === "GET") {
     const bbox = url.searchParams.get("bbox") || "";
     if (!/^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){3}$/.test(bbox)) return json({ error: "bad bbox" }, 400);
@@ -92,6 +126,9 @@ async function ensureSchema(db) {
   if (schemaReady) return;
   await db.prepare("CREATE TABLE IF NOT EXISTS docs (col TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, updated TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (col, id))").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS docs_updated ON docs (updated)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, col TEXT NOT NULL, doc TEXT NOT NULL, name TEXT NOT NULL, type TEXT, size INTEGER, created TEXT)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS files_doc ON files (col, doc)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS file_chunks (file_id TEXT NOT NULL, idx INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (file_id, idx))").run();
   schemaReady = true;
 }
 function rowOut(r) {
