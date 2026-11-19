@@ -283,8 +283,10 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;const v=
       if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
       const j = await r.json();
       if (b.debug) return json({ raw: JSON.stringify(j).slice(0, 3000) });
-      const pts = (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {}; const total = (s2.sampleCount || 0); const valid = total - (s2.noDataCount || 0);
-        return { date: (d.interval || {}).from ? d.interval.from.slice(0, 10) : "", mean: s2.mean, min: s2.min, max: s2.max, p: total ? valid / total : 0 }; }).filter((x) => x.date && x.p >= 0.5 && Number.isFinite(x.mean));
+      const raw = (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {};
+        return { date: (d.interval || {}).from ? d.interval.from.slice(0, 10) : "", mean: s2.mean, min: s2.min, max: s2.max, total: s2.sampleCount || 0, nd: s2.noDataCount || 0 }; }).filter((x) => x.date && Number.isFinite(x.mean));
+      const minNd = raw.length ? Math.min(...raw.map((x) => x.nd)) : 0;
+      const pts = raw.map((x) => ({ date: x.date, mean: x.mean, min: x.min, max: x.max, p: x.total - minNd > 0 ? (x.total - x.nd) / (x.total - minNd) : 0 })).filter((x) => x.p >= 0.6);
       resp = json({ points: pts });
     } else {
       if (!okDate(b.date)) return json({ error: "bad date" }, 400);
