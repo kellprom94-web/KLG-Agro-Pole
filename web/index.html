@@ -2858,6 +2858,21 @@ function aoFieldHtml(f){
   <div class="card" style="margin-top:16px"><h2>Шляхові листи (${W.length})</h2><div class="tw"><table><thead><tr><th>Дата</th><th>№</th><th>Операція</th><th>Трактор / агрегат</th><th>Водій</th><th class="n">Га</th><th class="n">Пальне, л</th></tr></thead><tbody>${W.map(r => `<tr><td>${fdate(r.w.date)}</td><td>${esc(r.w.number || "")}</td><td>${esc(r.w.opName || "")}${r.w.variant ? ` <span class="muted">${esc(r.w.variant)}</span>` : ""}</td><td>${esc(r.w.tractor || "")}${r.w.implement ? " + " + esc(r.w.implement) : ""}</td><td>${esc(r.w.driver || "")}${r.x.helper || r.w.helper ? `<div class="note">пом. ${esc(r.x.helper || r.w.helper)}</div>` : ""}</td><td class="n">${fmt(r.ha)}</td><td class="n">${fmt(r.fuel, 1)}${(r.w.fields || []).length > 1 ? `<div class="note">частка з ${fmt(num(r.w.fuel), 1)}</div>` : ""}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">Немає</td></tr>`}</tbody></table></div></div>
   <div class="card" style="margin-top:16px"><h2>Лімітно-забірні карти (${Z.length})</h2><div class="tw"><table><thead><tr><th>Дата</th><th>№</th><th>Вид</th><th>Операція</th><th>Матеріал</th><th class="n">Кількість</th><th class="n">Площа, га</th></tr></thead><tbody>${Z.map(r => `<tr><td>${fdate(r.d.date)}</td><td>${esc(r.d.number || "")}</td><td>${esc(r.d.kind || "")}</td><td>${esc(r.l.opName || r.d.opName || "")}</td><td>${esc(aoItemName(r.l))}</td><td class="n">${fmt(num(r.l.qty))} ${esc(r.l.unit || "")}</td><td class="n">${r.l.area ? fmt(num(r.l.area)) : "—"}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">Немає</td></tr>`}</tbody></table></div></div>`;
 }
+async function aoCreateFields(){
+  const have = new Set(); S.fields.forEach(f => aoKeys(f).forEach(k => have.add(k)));
+  const groups = {}; S.aofields.forEach(a => { const k = aoNorm(a.name); if(!k || have.has(k)) return; (groups[k] ||= []).push(a); });
+  const list = Object.values(groups); if(!list.length){ toast("Усі поля вже є"); return; }
+  confirmBox(`Створити в КЛГ Поле ${list.length} полів з АгроОбліку?`, async () => {
+    let n = 0; toast("Створюю поля…");
+    for(const rs of list){
+      rs.sort((a, b) => String(b.season).localeCompare(String(a.season)) || (String(a.name).includes(" · ") ? 1 : -1));
+      const base = rs.find(r => !String(r.name).includes(" · ")) || rs[0];
+      const seasons = {}; rs.forEach(r => { const y = Number(r.season); const c = String(r.crop || ""); if(!y || /^(не вказано|інше)$/i.test(c)) return; if(!seasons[y] || !String(r.name).includes(" · ")) seasons[y] = { crop: c }; });
+      try { await save("fields", { name: String(base.name).split(" · ")[0].trim(), group: base.division || "", area: num(base.area), seasons, note: "Створено з АгроОбліку" }); n++; } catch(e){}
+    }
+    toast(`Створено полів: ${n}`); render();
+  });
+}
 let AOI = null;
 async function loadAo(){ try { AOI = await api("/ao/info"); } catch(e){ AOI = { error: true }; } render(); }
 function viewAgrooblik(){
@@ -2874,7 +2889,7 @@ function viewAgrooblik(){
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><code id="aoUrl" style="word-break:break-all;background:var(--soft,#f3f5f2);padding:6px 8px;border-radius:6px">${esc(AOI.url || "")}</code><button class="btn sm" type="button" data-act="aoCopy">Копіювати</button><button class="btn sm" type="button" data-act="aoReload">Оновити</button></div></div>
   <div class="card" style="margin-top:16px"><h2>Відповідність полів</h2><p class="note">Поля зіставляються за назвою (частина після «·» не враховується). Якщо в АгроОбліку поле називається інакше, допишіть ту назву; кілька назв — через кому.</p>
   <div class="tw"><table><thead><tr><th>Поле в КЛГ Поле</th><th class="n">Га</th><th>Інші назви в АгроОбліку</th><th class="n">Шляхових</th><th class="n">ЛЗК</th></tr></thead><tbody>${S.fields.filter(f => !f.archived).sort((a, b) => (a.name||"").localeCompare(b.name||"", "uk")).map(f => { const d = aoFieldData(f); return `<tr><td>${esc(f.name)}</td><td class="n">${fmt(num(f.area))}</td><td><input data-aonames="${esc(f.id)}" value="${esc(f.aoNames || "")}" placeholder="напр. 40 Вовочка" style="min-width:220px"></td><td class="n">${d.wb.length || "—"}</td><td class="n">${d.lz.length || "—"}</td></tr>`; }).join("")}</tbody></table></div>
-  ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
+  ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p><button class="btn pri" type="button" data-act="aoCreate">Створити ці поля в КЛГ Поле (${unm.length})</button> <span class="note">Назва, площа, відділення (як група) і культури за сезонами. Контури можна домалювати або завантажити потім.</span></p><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
 }
 
 /* ---------- Telegram notifications ---------- */
@@ -3132,6 +3147,7 @@ main.addEventListener("click", e => {
     if(["backupNow","exportAll","restore","restoreBackup","delBackup"].includes(a)){ backupAction(a, d); return; }
     if(a.startsWith("tg")){ tgAction(a, d); return; }
     if(a === "aoReload"){ AOI = null; render(); return; }
+    if(a === "aoCreate"){ aoCreateFields(); return; }
     if(a === "aoCopy"){ const t = (document.getElementById("aoUrl") || {}).textContent || ""; try { navigator.clipboard.writeText(t).then(() => toast("Адресу скопійовано")); } catch(e){ toast(t); } return; }
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
