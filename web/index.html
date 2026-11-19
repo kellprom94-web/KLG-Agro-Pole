@@ -535,7 +535,7 @@ function startDraw(key, onDone){
 }
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
 function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
-function pickField(fid){ state.fieldSel = fid; if(state.view !== "fields") location.hash = "fields"; else render(); }
+function pickField(fid){ if(state.fieldSel !== fid){ clearNdviLayer(); state.ndviShown = null; } state.fieldSel = fid; if(state.view !== "fields") location.hash = "fields"; else render(); }
 function attachMaps(){
   document.querySelectorAll(".mapslot").forEach(slot => {
     const key = slot.dataset.slot;
@@ -715,6 +715,7 @@ function fieldCard(f){
     ${years.length?`<h2 style="margin-top:16px">Історія культур</h2><div class="legend">${years.map(y=>`<span><b>${y}</b> ${cropTag(f.seasons[y].crop)}</span>`).join("")}</div>`:""}
     ${(() => { const ps = S.parcels.filter(p => (p.fieldIds||[]).includes(f.id)); return ps.length ? `<h2 style="margin-top:16px">Земельні ділянки (${ps.length}) · ${fmt(sum(ps,p=>p.area),2)} га</h2><div class="tw"><table><tbody>${ps.map(p => { const l = parcelActiveLease(p); return `<tr class="click" data-parcel="${esc(p.id)}"><td>${esc(p.cadastre||"—")}<div class="note">${esc(nameOf("owners",p.ownerId)||"")}</div></td><td class="n">${fmt(num(p.area),4)} га</td><td>${l?leasePill(l)+`<div class="note">до ${fdate(l.dateTo)}</div>`:`<span class="pill st-cancel">${esc(parcelStatus(p))}</span>`}</td></tr>`; }).join("")}</tbody></table></div>` : ""; })()}
     ${(() => { const rs = S.scoutreports.filter(r => r.fieldId === f.id).sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5); return `<h2 style="margin-top:16px">Останні звіти оглядів <button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button></h2>` + (rs.length ? `<div class="tw"><table><tbody>${rs.map(r => `<tr class="click" data-scout="${esc(r.id)}"><td>${fdate(r.date)}</td><td>${esc(r.stage||"")}</td><td>${(r.threats||[]).map(t => esc(nameOf("plantthreats", t.threatId)||"") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ") || esc((r.note||"").slice(0,60))}</td><td>${esc(r.author||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Оглядів ще не було.</p>`); })()}
+    <h2 style="margin-top:16px">Вегетація (NDVI) · сезон ${state.season}</h2><div id="ndviBox" data-fid="${esc(f.id)}">${f.contours ? `<p class="note">Завантажую супутникові дані…</p>` : `<p class="note">Потрібен контур поля.</p>`}</div>
     <h2 style="margin-top:16px">Погода</h2><div id="wxBox" data-fid="${esc(f.id)}">${f.contours ? `<p class="note">Завантажую погоду…</p>` : `<p class="note">Погода з’явиться, коли в поля буде контур.</p>`}</div>
     <h2 style="margin-top:16px">Агрооперації (${ops.length})</h2>
     ${ops.length ? `<div class="tw"><table><tbody>${ops.slice(0,15).map(o=>`<tr class="click" data-op="${esc(o.id)}"><td>${esc(opTitle(o))}<div class="note">сезон ${esc(o.season)} · ${fdate(o.factFrom||o.plannedFrom)}</div></td><td>${statusPill(o.status)}</td><td class="n">${fmt(opDone(o))} / ${fmt(opPlanned(o))} га</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Ще немає.</p>`}
@@ -2623,6 +2624,59 @@ function userDialog(u){
   const sel = document.getElementById("uR"); if(sel) sel.onchange = () => { document.getElementById("uH").textContent = ROLE_HELP[sel.value] || ""; };
 }
 
+/* ---------- NDVI (Sentinel-2 via Copernicus, through the worker) ---------- */
+const ndviCache = {};
+const fieldGeom = f => ({ type: "MultiPolygon", coordinates: f.contours.map(r => [r]) });
+function ndviRange(){ const s = state.season; const end = s + "-12-31"; return { from: (s - 1) + "-08-01", to: today() < end ? today() : end }; }
+async function loadNdviStats(f){
+  const r = ndviRange(); const key = f.id + "|" + r.from + "|" + r.to + "|" + JSON.stringify(f.contours).length;
+  if(ndviCache[key]) return ndviCache[key];
+  const res = await fetch("/api/ndvi/stats", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.assign({ geometry: fieldGeom(f) }, r)) });
+  if(res.status === 503) return { notConfigured: true };
+  if(!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+  return ndviCache[key] = await res.json();
+}
+function ndviColor(v){ return v < 0.2 ? "#c9a96a" : v < 0.35 ? "#e8d777" : v < 0.5 ? "#a6d65a" : v < 0.65 ? "#5fae3c" : "#1f7a21"; }
+function ndviChart(pts){
+  if(!pts.length) return `<p class="note">За сезон немає безхмарних знімків цього поля.</p>`;
+  const W = 560, H = 170, L = 34, R = 10, T = 10, B = 24;
+  const t0 = new Date(pts[0].date).getTime(), t1 = Math.max(t0 + 864e5, new Date(pts[pts.length - 1].date).getTime());
+  const x = d => L + (new Date(d).getTime() - t0) / (t1 - t0) * (W - L - R), y = v => T + (1 - Math.max(0, Math.min(1, v))) * (H - T - B);
+  const grid = [0, 0.2, 0.4, 0.6, 0.8, 1].map(v => `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="10" fill="var(--muted)">${v.toFixed(1)}</text>`).join("");
+  const months = []; const d0 = new Date(t0); d0.setDate(1); for(let d = new Date(d0); d.getTime() <= t1; d.setMonth(d.getMonth() + 1)) if(d.getTime() >= t0) months.push(new Date(d));
+  const mlab = months.map(d => `<text x="${x(d.toISOString().slice(0,10))}" y="${H-6}" font-size="10" fill="var(--muted)" text-anchor="middle">${["січ","лют","бер","кві","тра","чер","лип","сер","вер","жов","лис","гру"][d.getMonth()]}</text>`).join("");
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(p.date).toFixed(1) + " " + y(p.mean).toFixed(1)).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" aria-label="Графік NDVI">${grid}${mlab}<path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    ${pts.map(p => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.mean).toFixed(1)}" r="${state.ndviShown && state.ndviShown.date === p.date ? 6 : 4}" fill="${ndviColor(p.mean)}" stroke="var(--ink)" stroke-width="1" style="cursor:pointer" data-ndvidate="${p.date}"><title>${fdate(p.date)}: NDVI ${p.mean.toFixed(2)} (безхмарно ${Math.round(p.p*100)}%)</title></circle>`).join("")}</svg>`;
+}
+function ndviBoxHtml(f, j){
+  if(j.notConfigured) return `<p class="note">Супутникові знімки ще не підключені: адміністратор має додати ключі Copernicus (CDSE_CLIENT_ID, CDSE_CLIENT_SECRET) у Cloudflare.</p>`;
+  const pts = j.points || []; const last = pts[pts.length - 1];
+  return `${last ? `<div class="kpis" style="margin-bottom:8px"><div class="kpi"><b style="color:${ndviColor(last.mean)}">${last.mean.toFixed(2)}</b><span>NDVI ${fdate(last.date)} · останній безхмарний знімок</span></div><div class="kpi"><b>${pts.length}</b><span>безхмарних знімків за сезон</span></div></div>` : ""}
+  ${ndviChart(pts)}<div class="legend" style="align-items:center"><span class="note">Натисніть на точку, щоб показати знімок на карті.</span><span style="flex:1"></span>${[["<0.2","#c9a96a"],["0.2–0.35","#e8d777"],["0.35–0.5","#a6d65a"],["0.5–0.65","#5fae3c"],[">0.65","#1f7a21"]].map(([l,c]) => `<span class="crop"><i class="dot" style="background:${c}"></i>${l}</span>`).join("")}${state.ndviShown ? `<button class="btn sm" type="button" data-act="ndviClear">Прибрати знімок</button>` : ""}</div>`;
+}
+function fillNdvi(){
+  const el = document.getElementById("ndviBox"); const f = el && byId("fields", el.dataset.fid); if(!f || !f.contours) return;
+  loadNdviStats(f).then(j => { const b = document.getElementById("ndviBox"); if(b && b.dataset.fid === f.id) b.innerHTML = ndviBoxHtml(f, j); if(!j.notConfigured && !state.ndviShown && (j.points||[]).length && state.ndviAuto !== f.id){ state.ndviAuto = f.id; showNdviImage(f, j.points[j.points.length - 1].date); } })
+    .catch(e => { const b = document.getElementById("ndviBox"); if(b) b.innerHTML = `<p class="note">Не вдалося отримати дані NDVI (${esc(String(e.message || e))}).</p>`; });
+}
+function clearNdviLayer(){ const M = MAPS.fields; if(M && M.map.getLayer && M.map.getLayer("ndvi-img")){ M.map.removeLayer("ndvi-img"); M.map.removeSource("ndvi-img"); } if(state.ndviUrl){ URL.revokeObjectURL(state.ndviUrl); state.ndviUrl = null; } }
+async function showNdviImage(f, date){
+  const M = MAPS.fields; if(!M || !M.map.addSource) return;
+  const b = bboxOf([f]); if(!b) return;
+  const lat = (b[1] + b[3]) / 2, wm = (b[2] - b[0]) * 111320 * Math.cos(lat * Math.PI / 180), hm = (b[3] - b[1]) * 110540;
+  const scale = Math.min(1, 1400 / Math.max(wm / 10, hm / 10)); const width = Math.max(64, Math.round(wm / 10 * scale)), height = Math.max(64, Math.round(hm / 10 * scale));
+  toast("Завантажую знімок " + fdate(date) + "…");
+  const r = await fetch("/api/ndvi/image", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ geometry: fieldGeom(f), date, width, height }) });
+  if(!r.ok){ toast("Знімок недоступний"); return; }
+  clearNdviLayer();
+  const url = URL.createObjectURL(await r.blob()); state.ndviUrl = url; state.ndviShown = { fid: f.id, date };
+  const add = () => { if(M.map.getSource("ndvi-img")) return; M.map.addSource("ndvi-img", { type: "image", url, coordinates: [[b[0], b[3]], [b[2], b[3]], [b[2], b[1]], [b[0], b[1]]] }); M.map.addLayer({ id: "ndvi-img", type: "raster", source: "ndvi-img", paint: { "raster-opacity": 0.92, "raster-resampling": "nearest" } }, "f-line"); };
+  if(M.map.isStyleLoaded()) add(); else M.map.once("idle", add);
+  M.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, duration: 600, maxZoom: 16 });
+  const el = document.getElementById("ndviBox"); if(el){ const j = Object.values(ndviCache).find(x => x && x.points && x.points.some(p => p.date === date)); if(j) el.innerHTML = ndviBoxHtml(f, j); }
+}
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2694,6 +2748,7 @@ function render(){
   main.innerHTML = (VIEWS[state.view] || viewDash)();
   document.querySelectorAll(".rail a").forEach(a => a.classList.toggle("on", a.dataset.v === state.view));
   attachMaps();
+  fillNdvi();
   { const wx = document.getElementById("wxBox"); const f = wx && byId("fields", wx.dataset.fid); if(f && f.contours){ loadWeather(f).then(w => { const el = document.getElementById("wxBox"); if(el && el.dataset.fid === f.id) el.innerHTML = weatherHtml(w, f); }).catch(() => { const el = document.getElementById("wxBox"); if(el) el.innerHTML = `<p class="note">Погода тимчасово недоступна.</p>`; }); } }
   if(focusId){ const el = document.getElementById(focusId); if(el){ el.focus(); try { if(caret!=null) el.setSelectionRange(caret, caret); } catch(e){} } }
 }
@@ -2707,7 +2762,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2731,6 +2786,7 @@ main.addEventListener("click", e => {
     if(agroAction(a, d)) return;
     if(planAction(a, d)) return;
     if(a === "newUser") return userDialog(null);
+    if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -2746,6 +2802,7 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.ndvidate){ const f = byId("fields", state.fieldSel); if(f) showNdviImage(f, d.ndvidate); return; }
   if(d.user) return userDialog((USERS || []).find(u => u.id === d.user));
   if(d.plantab){ state.planTab = d.plantab; return render(); }
   if(d.agroplan) return agroplanDialog(byId("agroplans", d.agroplan));
@@ -2781,7 +2838,7 @@ main.addEventListener("click", e => {
   if(d.lease) return leaseDialog(byId("leases", d.lease));
   if(d.owner) return ownerDialog(byId("owners", d.owner));
   if(d.pay) return paymentDialog(byId("payments", d.pay));
-  if(d.field){ state.fieldSel = d.field; return render(); }
+  if(d.field){ if(state.fieldSel !== d.field){ clearNdviLayer(); state.ndviShown = null; } state.fieldSel = d.field; return render(); }
   if(d.op) return opDialog(byId("ops", d.op));
   if(d.machine){ state.machineId = d.machine; return render(); }
   if(d.task) return taskDialog(byId("tasks", d.task));

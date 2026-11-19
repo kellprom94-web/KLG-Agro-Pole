@@ -40,6 +40,13 @@ async function readSession(req, env) {
   const u = await env.DB.prepare("SELECT id, login, name, role, active FROM users WHERE id = ?").bind(p.u).first();
   return u && u.active ? { id: u.id, login: u.login, name: u.name, role: ROLES[u.role] ? u.role : "viewer" } : null;
 }
+let cdseCache = null;
+async function cdseToken(env) {
+  if (cdseCache && cdseCache.exp > Date.now() + 60000) return cdseCache.token;
+  const r = await fetch("https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "client_credentials", client_id: env.CDSE_CLIENT_ID, client_secret: env.CDSE_CLIENT_SECRET }) });
+  if (!r.ok) throw new Error("Copernicus login failed: " + r.status);
+  const j = await r.json(); cdseCache = { token: j.access_token, exp: Date.now() + (j.expires_in || 600) * 1000 }; return cdseCache.token;
+}
 const cookieHeader = (v, age) => `${COOKIE}=${v}; Path=/; Max-Age=${age}; HttpOnly; Secure; SameSite=Lax`;
 
 export default {
@@ -169,6 +176,47 @@ async function handleApi(req, env, url) {
     if (fr && !canWriteCol(user, fr.col)) return forbid();
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
+  }
+  if (path.startsWith("/api/ndvi/") && req.method === "POST") {
+    if (!env.CDSE_CLIENT_ID || !env.CDSE_CLIENT_SECRET) return json({ error: "ndvi_not_configured" }, 503);
+    const b = await req.json().catch(() => ({}));
+    const g = b.geometry;
+    if (!g || !["Polygon", "MultiPolygon"].includes(g.type) || JSON.stringify(g).length > 200000) return json({ error: "bad geometry" }, 400);
+    const kind = path === "/api/ndvi/stats" ? "stats" : path === "/api/ndvi/image" ? "image" : "";
+    if (!kind) return json({ error: "not found" }, 404);
+    const okDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "");
+    const cacheKey = new Request("https://cache.klg/ndvi/" + kind + "/" + (await hmacHex("k", JSON.stringify([g, b.from, b.to, b.date, b.width]))));
+    let cached = null; try { cached = await caches.default.match(cacheKey); } catch (e) {} if (cached) return cached;
+    const token = await cdseToken(env);
+    const shPost = async (paths, body) => { for (const pth of paths) { const r = await fetch("https://sh.dataspace.copernicus.eu" + pth, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json", accept: kind === "image" ? "image/png" : "application/json" }, body: JSON.stringify(body) }); if (r.status !== 404) return r; } return null; };
+    const bounds = { geometry: g, properties: { crs: "http://www.opengis.net/def/crs/EPSG/0/4326" } };
+    let resp;
+    if (kind === "stats") {
+      if (!okDate(b.from) || !okDate(b.to)) return json({ error: "bad dates" }, 400);
+      const evalscript = `//VERSION=3
+function setup(){return{input:[{bands:["B04","B08","SCL","dataMask"]}],output:[{id:"ndvi",bands:1,sampleType:"FLOAT32"},{id:"dataMask",bands:1}]};}
+function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;const v=(s.B08-s.B04)/(s.B08+s.B04+1e-6);return{ndvi:[v],dataMask:[s.dataMask&&!bad?1:0]};}`;
+      const r = await shPost(["/statistics/v1", "/api/v1/statistics"], { input: { bounds, data: [{ type: "sentinel-2-l2a", dataFilter: { maxCloudCoverage: 70 } }] }, aggregation: { timeRange: { from: b.from + "T00:00:00Z", to: b.to + "T23:59:59Z" }, aggregationInterval: { of: "P1D" }, evalscript, resx: 0.0001, resy: 0.0001 }, calculations: { default: {} } });
+      if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
+      const j = await r.json();
+      const pts = (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {}; const total = (s2.sampleCount || 0); const valid = total - (s2.noDataCount || 0);
+        return { date: (d.interval || {}).from ? d.interval.from.slice(0, 10) : "", mean: s2.mean, min: s2.min, max: s2.max, p: total ? valid / total : 0 }; }).filter((x) => x.date && x.p >= 0.5 && Number.isFinite(x.mean));
+      resp = json({ points: pts });
+    } else {
+      if (!okDate(b.date)) return json({ error: "bad date" }, 400);
+      const w = Math.max(64, Math.min(1400, Math.round(Number(b.width) || 512))), h = Math.max(64, Math.min(1400, Math.round(Number(b.height) || 512)));
+      const evalscript = `//VERSION=3
+function setup(){return{input:[{bands:["B04","B08","SCL","dataMask"]}],output:{bands:4}};}
+const ramp=[[-1,[0.55,0.35,0.2]],[0,[0.75,0.6,0.4]],[0.2,[0.93,0.86,0.45]],[0.35,[0.75,0.87,0.35]],[0.5,[0.45,0.75,0.25]],[0.65,[0.2,0.6,0.15]],[0.8,[0.05,0.4,0.08]]];
+function col(v){for(let i=ramp.length-1;i>=0;i--){if(v>=ramp[i][0]){if(i==ramp.length-1)return ramp[i][1];const a=ramp[i],b=ramp[i+1],t=(v-a[0])/(b[0]-a[0]);return [0,1,2].map(k=>a[1][k]+(b[1][k]-a[1][k])*t);}}return ramp[0][1];}
+function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.dataMask)return[0,0,0,0];if(bad)return[0.85,0.85,0.85,0.75];const v=(s.B08-s.B04)/(s.B08+s.B04+1e-6);const c=col(v);return[c[0],c[1],c[2],1];}`;
+      const r = await shPost(["/process/v1", "/api/v1/process"], { input: { bounds, data: [{ type: "sentinel-2-l2a", dataFilter: { timeRange: { from: b.date + "T00:00:00Z", to: b.date + "T23:59:59Z" }, mosaickingOrder: "leastCC" } }] }, output: { width: w, height: h, responses: [{ identifier: "default", format: { type: "image/png" } }] }, evalscript });
+      if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
+      resp = new Response(await r.arrayBuffer(), { headers: { "content-type": "image/png" } });
+    }
+    const toCache = new Response(resp.clone().body, { headers: { "content-type": resp.headers.get("content-type"), "cache-control": "max-age=43200" } });
+    try { await caches.default.put(cacheKey, toCache); } catch (e) {}
+    return resp;
   }
   if (path === "/api/weather" && req.method === "GET") {
     const lat = Number(url.searchParams.get("lat")), lon = Number(url.searchParams.get("lon"));
