@@ -179,6 +179,8 @@ tr:last-child td{border-bottom:0}
     <a href="#machines" data-v="machines">Машини</a>
     <a href="#tasks" data-v="tasks">Завдання техніки</a>
     <a href="#service" data-v="service">Обслуговування</a>
+    <a href="#fuel" data-v="fuel">Паливо</a>
+    <a href="#harvest" data-v="harvest">Перевезення врожаю</a>
     <div class="sec">Інше</div>
     <a href="#land" data-v="land">Земельний банк</a>
     <a href="#wms" data-v="wms">Склад</a>
@@ -215,7 +217,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -234,7 +236,7 @@ const state = {
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
   landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
-  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover",
+  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips",
   mapVB: {}
 };
 
@@ -980,7 +982,8 @@ function taskDialog(t, preset={}){
       return !!(await save("tasks", Object.assign({}, t, { date: val(m,"tDate"), start: val(m,"tS"), end: val(m,"tE"), hours: val(m,"tH") ? num(val(m,"tH")) : "", machineId, driverId: val(m,"tD"), implementId: val(m,"tI"), opId, fieldId, work: val(m,"tW"),
         area: val(m,"tA") ? num(val(m,"tA")) : "", kmField: val(m,"tKF") ? num(val(m,"tKF")) : "", kmRoad: val(m,"tKR") ? num(val(m,"tKR")) : "", fuel: val(m,"tFu") ? num(val(m,"tFu")) : "", refuel: val(m,"tRef") ? num(val(m,"tRef")) : "", note: val(m,"tN") }))); }
   });
-  const hint = () => { const mm = byId("machines", val(m,"tM")); const a = num(val(m,"tA")), fu = num(val(m,"tFu")); let s = ""; if(a && fu) s = `Фактична витрата: ${fmt(fu/a,1)} л/га.`; if(mm && mm.normHa && a) s += ` Норма: ${fmt(num(mm.normHa)*a,0)} л (${fmt(num(mm.normHa),1)} л/га).`; m.querySelector("#tHint").textContent = s; };
+  const hint = () => { const op = byId("ops", val(m,"tO")); const n = normFor(val(m,"tM"), op ? op.workType : "") || {}; const a = num(val(m,"tA")), fu = num(val(m,"tFu")), km = num(val(m,"tKF")) + num(val(m,"tKR")); let s = ""; if(a && fu) s = `Фактична витрата: ${fmt(fu/a,1)} л/га.`; else if(km && fu) s = `Фактична витрата: ${fmt(fu/km*100,1)} л/100 км.`;
+    if(num(n.normHa) && a) s += ` Норма: ${fmt(num(n.normHa)*a,0)} л (${fmt(num(n.normHa),1)} л/га).`; else if(num(n.normKm) && km) s += ` Норма: ${fmt(num(n.normKm)*km/100,0)} л (${fmt(num(n.normKm),1)} л/100 км).`; m.querySelector("#tHint").textContent = s; };
   m.addEventListener("input", hint); hint();
   m.querySelector("#tM").addEventListener("change", e => { const mm = byId("machines", e.target.value); if(mm && mm.driverId && !val(m,"tD")) m.querySelector("#tD").value = mm.driverId; });
   m.querySelector("#tO").addEventListener("change", e => { const op = byId("ops", e.target.value); if(op){ m.querySelector("#tF").value = op.fieldId || ""; if(op.implementId && !val(m,"tI")) m.querySelector("#tI").value = op.implementId; } });
@@ -1724,7 +1727,7 @@ function stockReplay(until){
   const get = (w, p) => st[key(w, p)] ||= { w, p, qty: 0, value: 0 };
   const avg = x => x.qty > 0 ? x.value / x.qty : 0;
   const moves = [];
-  const docs = S.whdocs.filter(d => d.status === "posted" && (!until || (d.date || "") <= until)).sort((a,b) => ((a.date||"") + (a.createdAt||"")).localeCompare((b.date||"") + (b.createdAt||"")));
+  const docs = [...S.whdocs, ...fuelDocs()].filter(d => d.status === "posted" && (!until || (d.date || "") <= until)).sort((a,b) => ((a.date||"") + (a.createdAt||"")).localeCompare((b.date||"") + (b.createdAt||"")));
   for(const d of docs){
     const lines = d.lines || [];
     if(d.kind === "receipt") lines.forEach(l => { const x = get(d.to, l.productId); x.qty += num(l.qty); x.value += lineSum(l); moves.push({ d, l, w: d.to, p: l.productId, qty: num(l.qty), value: lineSum(l) }); });
@@ -2026,6 +2029,269 @@ function wmsAction(a, d){
   return false;
 }
 
+/* ---------- machinery extras: maintenance plans, norms, fuel, harvest transport, waybills, elevators ---------- */
+function machineReadings(mid){
+  let km = 0, mh = 0, kmDate = "", mhDate = "";
+  const take = (d, k, h) => { if(num(k) > km){ km = num(k); kmDate = d; } if(num(h) > mh){ mh = num(h); mhDate = d; } };
+  S.fuelings.filter(f => f.machineId === mid).forEach(f => take(f.date, f.odometer, f.motohours));
+  S.service.filter(s => s.machineId === mid && s.status === "done").forEach(s => take(s.date, s.km, s.mh));
+  const x = byId("machines", mid) || {}; take(x.readingDate || "", x.odometer, x.motohours);
+  return { km, mh, kmDate, mhDate };
+}
+function planApplies(p, x){ return (p.machineIds || []).length ? p.machineIds.includes(x.id) : (!p.subtype || p.subtype === x.subtype) && (!p.type || p.type === (x.type || "Агро")); }
+function planDue(p, x){
+  const last = S.service.filter(s => s.machineId === x.id && s.status === "done" && (s.planId === p.id || s.kind === p.name)).sort((a,b) => (b.date||"").localeCompare(a.date||""))[0];
+  const r = machineReadings(x.id); const res = { last, r, reasons: [], state: "ok" };
+  if(!last){ res.state = "unknown"; res.reasons.push("внесіть останнє виконане ТО"); return res; }
+  const lastKm = last ? num(last.km) : 0, lastMh = last ? num(last.mh) : 0, lastDate = last ? last.date : (x.inServiceDate || "");
+  if(num(p.everyKm)){ res.nextKm = lastKm + num(p.everyKm); const left = res.nextKm - r.km; res.reasons.push(`${fmt0(left)} км`); if(left <= 0) res.state = "late"; else if(left <= num(p.everyKm) * 0.1 && res.state !== "late") res.state = "soon"; }
+  if(num(p.everyMh)){ res.nextMh = lastMh + num(p.everyMh); const left = res.nextMh - r.mh; res.reasons.push(`${fmt0(left)} мотогод.`); if(left <= 0) res.state = "late"; else if(left <= num(p.everyMh) * 0.1 && res.state !== "late") res.state = "soon"; }
+  if(num(p.everyDays) && lastDate){ const d = new Date(lastDate); d.setDate(d.getDate() + num(p.everyDays)); res.nextDate = d.toISOString().slice(0,10); const left = Math.round((d - new Date(today())) / 864e5); res.reasons.push(`${left} дн.`); if(left <= 0) res.state = "late"; else if(left <= Math.max(7, num(p.everyDays) * 0.1) && res.state !== "late") res.state = "soon"; }
+  return res;
+}
+function maintenanceDue(){
+  const out = [];
+  S.mplans.filter(p => !p.archived).forEach(p => S.machines.filter(x => planApplies(p, x)).forEach(x => out.push({ p, x, d: planDue(p, x) })));
+  const rank = { late: 0, soon: 1, unknown: 2, ok: 3 };
+  return out.sort((a,b) => rank[a.d.state] - rank[b.d.state]);
+}
+const DUE_PILL = { late: ["Прострочено","st-cancel","color:var(--bad)"], soon: ["Скоро","st-progress",""], unknown: ["Немає даних","st-planned",""], ok: ["В нормі","st-done",""] };
+function viewServiceFull(){
+  const T = state.svcTab || "book";
+  const tabs = [["book","Сервісна книга"],["due","Наступне ТО за регламентом"],["plans","Регламенти обслуговування"]];
+  let body = "";
+  if(T === "book") body = viewServiceBook();
+  if(T === "due"){ const rows = maintenanceDue();
+    body = rows.length ? `<div class="tw"><table><thead><tr><th>Машина</th><th>Регламент</th><th>Останнє виконання</th><th>Поточні показники</th><th>Наступне</th><th>Залишилось</th><th>Стан</th><th></th></tr></thead><tbody>${rows.map(({p,x,d}) => { const [t,c,st] = DUE_PILL[d.state];
+      return `<tr><td><b>${esc(x.name)}</b></td><td>${esc(p.name)}<div class="note">${[num(p.everyKm)?"кожні "+fmt0(num(p.everyKm))+" км":"", num(p.everyMh)?"кожні "+fmt0(num(p.everyMh))+" мотогод.":"", num(p.everyDays)?"кожні "+fmt0(num(p.everyDays))+" дн.":""].filter(Boolean).join(", ")}</div></td>
+      <td>${d.last ? fdate(d.last.date) + `<div class="note">${d.last.km?fmt0(num(d.last.km))+" км ":""}${d.last.mh?fmt0(num(d.last.mh))+" мотогод.":""}</div>` : "—"}</td><td>${d.r.km?fmt0(d.r.km)+" км":""} ${d.r.mh?fmt0(d.r.mh)+" мотогод.":""}${!d.r.km&&!d.r.mh?"—":""}</td>
+      <td>${[d.nextKm?fmt0(d.nextKm)+" км":"", d.nextMh?fmt0(d.nextMh)+" мотогод.":"", d.nextDate?fdate(d.nextDate):""].filter(Boolean).join(" / ")||"—"}</td><td>${d.reasons.join(" / ")||"—"}</td><td><span class="pill ${c}" style="${st}">${t}</span></td>
+      <td><button class="btn sm" type="button" data-act="planService" data-plan="${esc(p.id)}" data-machine="${esc(x.id)}">Запланувати</button></td></tr>`; }).join("")}</tbody></table></div>
+      <p class="note">Поточні пробіг і мотогодини беруться з останніх заправок, записів ТО і картки машини.</p>` : `<div class="card"><div class="empty"><b>Регламентів ще немає</b>Додайте регламент (наприклад, ТО-1 кожні 250 мотогодин), і програма покаже, коли наступне обслуговування для кожної машини.</div></div>`; }
+  if(T === "plans"){ const list = [...S.mplans].sort((a,b)=>(a.name||"").localeCompare(b.name||"","uk"));
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newPlan">+ Регламент</button></div><div class="tw"><table><thead><tr><th>Тип</th><th>Назва</th><th>Вид технічного обслуговування</th><th>Періодичність</th><th>Застосовується до</th><th>Відповідальні за виконання</th><th>Додаткова інформація</th></tr></thead><tbody>
+    ${list.length ? list.map(p => `<tr class="click" data-mplan="${esc(p.id)}"><td>${esc(p.kindGroup||"Обслуговування")}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.kind||"")}</td><td>${[num(p.everyKm)?fmt0(num(p.everyKm))+" км":"", num(p.everyMh)?fmt0(num(p.everyMh))+" мотогод.":"", num(p.everyDays)?fmt0(num(p.everyDays))+" дн.":""].filter(Boolean).join(" / ")||"—"}</td><td>${(p.machineIds||[]).length ? (p.machineIds||[]).map(id=>esc(nameOf("machines",id))).join(", ") : esc([p.type, p.subtype].filter(Boolean).join(" / ") || "усі машини")}</td><td>${esc(p.responsible||"")}</td><td>${esc(p.note||"")}</td></tr>`).join("") : `<tr><td colspan="7"><div class="empty">Регламентів немає.</div></td></tr>`}</tbody></table></div>`; }
+  const late = maintenanceDue().filter(r => r.d.state === "late").length;
+  return header("Обслуговування", `<button class="btn pri" type="button" data-act="newService">+ Обслуговування</button>`) + statusBanner() + (late ? `<div class="banner err">Прострочено ТО за регламентом: ${late}. Див. вкладку «Наступне ТО за регламентом».</div>` : "") +
+    `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-svctab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function viewServiceBook(){
+  const plan = S.service.filter(s => s.status !== "done").sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const done = S.service.filter(s => s.status === "done" && inPeriod(s.date)).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  return `<div class="card" style="margin-bottom:16px"><h2>Заплановано (${plan.length})</h2>${plan.length ? serviceTable(plan) : `<p class="note">Немає запланованих робіт.</p>`}</div>${periodBar()}
+  <div class="card"><h2>Виконано за період (${done.length}) · ${fmt(sum(done,s=>s.cost))} грн</h2>${done.length ? serviceTable(done) : `<p class="note">Немає записів за період.</p>`}</div>`;
+}
+function mplanDialog(p){
+  const isNew = !p; p = p || { kindGroup: "Обслуговування", machineIds: [] };
+  openModal({ title: isNew ? "Новий регламент обслуговування" : p.name, wide: true,
+    body: `<div class="f"><label>Назва<input id="mpN" value="${esc(p.name||"")}" placeholder="ТО-1"></label><label>Тип<select id="mpG">${optsFrom(["Обслуговування","Ремонт","Огляд"], p.kindGroup)}</select></label>
+      <label>Вид технічного обслуговування<input id="mpK" list="svcList" value="${esc(p.kind||"")}"></label><label>Відповідальні за виконання<input id="mpR" value="${esc(p.responsible||"")}"></label>
+      <label>Кожні, км<input id="mpKm" inputmode="decimal" value="${esc(p.everyKm??"")}"></label><label>Кожні, мотогодин<input id="mpMh" inputmode="decimal" value="${esc(p.everyMh??"")}"></label><label>Кожні, днів<input id="mpD" inputmode="numeric" value="${esc(p.everyDays??"")}"></label>
+      <label>Для типу машин<select id="mpT">${optsFrom(Object.keys(MACHINE_TYPES), p.type, "усі")}</select></label><label>Для підтипу<select id="mpS">${optsFrom([...new Set(Object.values(MACHINE_TYPES).flat())], p.subtype, "усі")}</select></label>
+      <label class="full">Або конкретні машини<div class="checks">${sorted("machines").map(x => `<label><input type="checkbox" name="mpM" value="${esc(x.id)}" ${(p.machineIds||[]).includes(x.id)?"checked":""}>${esc(x.name)}</label>`).join("") || `<span class="note">Машин ще немає</span>`}</div></label>
+      <label class="full">Роботи і матеріали за регламентом<textarea id="mpW">${esc(p.works||"")}</textarea></label><label class="full">Додаткова інформація<textarea id="mpNo">${esc(p.note||"")}</textarea></label></div><datalist id="svcList">${SERVICE_KINDS.map(k=>`<option value="${esc(k)}">`).join("")}</datalist>`,
+    onDelete: isNew ? null : async () => remove("mplans", p.id),
+    onSave: async (m) => { const name = val(m,"mpN"); if(!name){ m.querySelector("#mpN").focus(); return false; }
+      return !!(await save("mplans", Object.assign({}, p, { name, kindGroup: val(m,"mpG"), kind: val(m,"mpK"), responsible: val(m,"mpR"), everyKm: num(val(m,"mpKm"))||"", everyMh: num(val(m,"mpMh"))||"", everyDays: num(val(m,"mpD"))||"", type: val(m,"mpT"), subtype: val(m,"mpS"), machineIds: checked(m,"mpM"), works: val(m,"mpW"), note: val(m,"mpNo") }))); }
+  });
+}
+
+/* consumption norms */
+function normFor(machineId, workType){
+  const x = byId("machines", machineId) || {};
+  const c = S.norms.filter(n => (!n.machineId || n.machineId === machineId) && (!n.subtype || n.subtype === x.subtype) && (!n.workType || n.workType === workType));
+  c.sort((a,b) => (!!b.machineId - !!a.machineId) || (!!b.workType - !!a.workType));
+  return c[0] || (x.normHa || x.normKm ? { normHa: x.normHa, normKm: x.normKm } : null);
+}
+function viewNorms(){
+  const list = [...S.norms].sort((a,b) => (nameOf("machines",a.machineId)||a.subtype||"").localeCompare(nameOf("machines",b.machineId)||b.subtype||"","uk"));
+  return `<div class="filters"><span class="note">Норма шукається від конкретної машини й виду робіт до загальної норми підтипу. Якщо норми немає, береться норма з картки машини.</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newNorm">+ Норма</button></div>
+  <div class="tw"><table><thead><tr><th>Машина / підтип</th><th>Вид робіт</th><th>Агрегат</th><th class="n">л/га</th><th class="n">л/100 км</th><th class="n">л/мотогод.</th><th>Примітка</th></tr></thead><tbody>
+  ${list.length ? list.map(n => `<tr class="click" data-norm="${esc(n.id)}"><td>${esc(nameOf("machines",n.machineId) || n.subtype || "усі")}</td><td>${esc(n.workType||"усі роботи")}</td><td>${esc(nameOf("implements",n.implementId)||"—")}</td><td class="n">${n.normHa?fmt(num(n.normHa),1):"—"}</td><td class="n">${n.normKm?fmt(num(n.normKm),1):"—"}</td><td class="n">${n.normMh?fmt(num(n.normMh),1):"—"}</td><td>${esc(n.note||"")}</td></tr>`).join("") : `<tr><td colspan="7"><div class="empty">Норм витрат ще немає.</div></td></tr>`}</tbody></table></div>`;
+}
+function normDialog(n){
+  const isNew = !n; n = n || {};
+  openModal({ title: isNew ? "Нова норма витрат" : "Норма витрат",
+    body: `<div class="f"><label>Машина<select id="nmM">${optsFrom(sorted("machines"), n.machineId, "— усі (за підтипом) —")}</select></label><label>Підтип машин<select id="nmS">${optsFrom([...new Set(Object.values(MACHINE_TYPES).flat())], n.subtype, "—")}</select></label>
+      <label>Вид робіт<select id="nmW">${opt("", "усі роботи", n.workType)}${workTypeOptions(n.workType)}</select></label><label>Агрегат<select id="nmI">${optsFrom(sorted("implements"), n.implementId, "—")}</select></label>
+      <label>л/га<input id="nmH" inputmode="decimal" value="${esc(n.normHa??"")}"></label><label>л/100 км<input id="nmK" inputmode="decimal" value="${esc(n.normKm??"")}"></label><label>л/мотогод.<input id="nmMh" inputmode="decimal" value="${esc(n.normMh??"")}"></label>
+      <label class="full">Примітка<input id="nmN" value="${esc(n.note||"")}"></label></div>`,
+    onDelete: isNew ? null : async () => remove("norms", n.id),
+    onSave: async (m) => !!(await save("norms", Object.assign({}, n, { name: "norm", machineId: val(m,"nmM"), subtype: val(m,"nmS"), workType: val(m,"nmW"), implementId: val(m,"nmI"), normHa: num(val(m,"nmH"))||"", normKm: num(val(m,"nmK"))||"", normMh: num(val(m,"nmMh"))||"", note: val(m,"nmN") })))
+  });
+}
+
+/* fuel: stations and fuelings */
+function viewFuel(){
+  const T = state.fuelTab || "fuelings";
+  const tabs = [["fuelings","Видача палива"],["report","Витрата: факт і норма"],["stations","АЗС"],["norms","Норми витрат"]];
+  let body = "";
+  if(T === "fuelings"){
+    const list = S.fuelings.filter(f => inPeriod(f.date) && (!state.fuelSt || f.stationId === state.fuelSt)).sort((a,b) => ((b.date||"")+(b.time||"")).localeCompare((a.date||"")+(a.time||"")));
+    body = periodBar() + `<div class="filters"><select id="fuelSt">${opt("", "Усі АЗС", state.fuelSt)}${sorted("fuelstations").map(s => opt(s.id, s.name, state.fuelSt)).join("")}</select><span class="muted">${list.length} заправок · ${fmt0(sum(list, f => f.liters))} л</span><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvFuel">Експорт</button><button class="btn pri" type="button" data-act="newFueling">+ Видача палива</button></div>
+    <div class="tw"><table><thead><tr><th>Дата</th><th>АЗС</th><th>Машина</th><th>Водій</th><th>Пальне</th><th class="n">Літрів</th><th class="n">Одометр, км</th><th class="n">Мотогодини</th><th>Поле / робота</th><th>Примітка</th></tr></thead><tbody>
+    ${list.length ? list.map(f => `<tr class="click" data-fueling="${esc(f.id)}"><td>${fdate(f.date)}<div class="note">${esc(f.time||"")}</div></td><td>${esc(nameOf("fuelstations",f.stationId)||"—")}</td><td>${esc(nameOf("machines",f.machineId)||"—")}</td><td>${esc(nameOf("people",f.driverId)||"—")}</td><td>${esc(prodName(f.productId)||"")}</td><td class="n"><b>${fmt(num(f.liters),1)}</b></td><td class="n">${f.odometer?fmt0(num(f.odometer)):"—"}</td><td class="n">${f.motohours?fmt(num(f.motohours),1):"—"}</td><td>${esc(nameOf("fields",f.fieldId)||f.work||"")}</td><td>${esc(f.note||"")}</td></tr>`).join("") : `<tr><td colspan="10"><div class="empty">Видач палива за період немає.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "report"){
+    const rows = sorted("machines").map(x => {
+      const fs = S.fuelings.filter(f => f.machineId === x.id && inPeriod(f.date)).sort((a,b)=>((a.date||"")+(a.time||"")).localeCompare((b.date||"")+(b.time||"")));
+      const ts = S.tasks.filter(t => t.machineId === x.id && inPeriod(t.date));
+      const liters = sum(fs, f => f.liters);
+      const kmVals = fs.map(f => num(f.odometer)).filter(Boolean), mhVals = fs.map(f => num(f.motohours)).filter(Boolean);
+      const km = kmVals.length > 1 ? Math.max(...kmVals) - Math.min(...kmVals) : sum(ts, t => num(t.kmField) + num(t.kmRoad));
+      const mh = mhVals.length > 1 ? Math.max(...mhVals) - Math.min(...mhVals) : sum(ts, hoursOf);
+      const ha = sum(ts, t => t.area);
+      const litersForRate = kmVals.length > 1 || mhVals.length > 1 ? liters - num((fs[0] || {}).liters) : liters;
+      const norm = normFor(x.id, "") || {}; let normL = 0;
+      ts.forEach(t => { const op = byId("ops", t.opId); const n = normFor(x.id, op ? op.workType : "") || {}; if(num(n.normHa) && num(t.area)) normL += num(n.normHa) * num(t.area); else if(num(n.normKm)) normL += num(n.normKm) * (num(t.kmField) + num(t.kmRoad)) / 100; else if(num(n.normMh)) normL += num(n.normMh) * hoursOf(t); });
+      return { x, liters, km, mh, ha, l100: km ? litersForRate / km * 100 : 0, lmh: mh ? litersForRate / mh : 0, lha: ha ? liters / ha : 0, normL, taskFuel: sum(ts, t => t.fuel), norm };
+    }).filter(r => r.liters || r.taskFuel);
+    body = periodBar() + (rows.length ? `<div class="tw"><table><thead><tr><th>Машина</th><th class="n">Видано, л</th><th class="n">У завданнях, л</th><th class="n">Пробіг, км</th><th class="n">л/100 км</th><th class="n">Мотогод.</th><th class="n">л/мотогод.</th><th class="n">Оброблено, га</th><th class="n">л/га</th><th class="n">За нормою, л</th><th class="n">Відхилення</th></tr></thead><tbody>
+      ${rows.map(r => { const used = r.taskFuel || r.liters; const dev = r.normL ? (used - r.normL) / r.normL * 100 : null; return `<tr class="click" data-machine-open="${esc(r.x.id)}"><td><b>${esc(r.x.name)}</b></td><td class="n">${fmt0(r.liters)}</td><td class="n">${r.taskFuel?fmt0(r.taskFuel):"—"}</td><td class="n">${r.km?fmt0(r.km):"—"}</td><td class="n">${r.l100?fmt(r.l100,1):"—"}</td><td class="n">${r.mh?fmt(r.mh,1):"—"}</td><td class="n">${r.lmh?fmt(r.lmh,1):"—"}</td><td class="n">${r.ha?fmt(r.ha):"—"}</td><td class="n">${r.lha?fmt(r.lha,1):"—"}</td><td class="n">${r.normL?fmt0(r.normL):"—"}</td><td class="n" style="color:${dev==null?"inherit":dev>10?"var(--bad)":dev>0?"var(--warn)":"var(--good)"}">${dev==null?"—":(dev>0?"+":"")+fmt(dev,1)+"%"}</td></tr>`; }).join("")}</tbody></table></div>
+      <p class="note">л/100 км і л/мотогод. рахуються між першою й останньою заправкою з показниками за період. Відхилення порівнює пальне із завдань (або видане) з нормою за видами робіт.</p>` : `<div class="card"><div class="empty">Даних про пальне за період немає.</div></div>`);
+  }
+  if(T === "stations"){
+    const { st } = stockReplay("");
+    const list = sorted("fuelstations");
+    body = `<div class="filters"><span class="note">АЗС прив’язана до складу: видача палива списує його з залишків складу.</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newStation">+ АЗС</button></div>
+    <div class="tw"><table><thead><tr><th>АЗС</th><th>Тип</th><th>Склад</th><th>Пальне</th><th class="n">Ємність, л</th><th class="n">Залишок, л</th><th>Відповідальний</th></tr></thead><tbody>
+    ${list.length ? list.map(s => { const rest = s.warehouseId && s.productId ? ((st[s.warehouseId + "|" + s.productId] || {}).qty || 0) : null; const low = rest != null && num(s.capacity) && rest < num(s.capacity) * 0.15;
+      return `<tr class="click" data-station="${esc(s.id)}"><td><b>${esc(s.name)}</b></td><td>${esc(s.type||"")}</td><td>${esc(whName(s.warehouseId)||"—")}</td><td>${esc(prodName(s.productId)||"")}</td><td class="n">${s.capacity?fmt0(num(s.capacity)):"—"}</td><td class="n" style="color:${low?"var(--bad)":"inherit"}">${rest==null?"—":fmt0(rest)}</td><td>${esc(s.responsible||"")}</td></tr>`; }).join("") : `<tr><td colspan="7"><div class="empty"><b>АЗС ще немає</b>Додайте стаціонарну АЗС або паливозаправник.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "norms") body = viewNorms();
+  return header("Паливо", `<button class="btn pri" type="button" data-act="newFueling">+ Видача палива</button>`) + statusBanner() + `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-fueltab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function stationDialog(s){
+  const isNew = !s; s = s || { type: "Стаціонарна" };
+  const fuels = sorted("products").filter(p => p.type === "Паливо");
+  openModal({ title: isNew ? "Нова АЗС" : s.name,
+    body: `<div class="f"><label>Назва<input id="stN" value="${esc(s.name||"")}"></label><label>Тип<select id="stT">${optsFrom(["Стаціонарна","Пересувна","Паливозаправник","Зовнішня (покупна)"], s.type)}</select></label>
+      <label>Склад (залишки пального)<select id="stW">${opt("", "—", s.warehouseId)}${sorted("warehouses").map(w => opt(w.id, w.name, s.warehouseId)).join("")}</select></label><label>Пальне за замовчуванням<select id="stP">${opt("", "—", s.productId)}${fuels.map(p => opt(p.id, p.name, s.productId)).join("")}</select></label>
+      <label>Ємність, л<input id="stC" inputmode="decimal" value="${esc(s.capacity??"")}"></label><label>Відповідальний<input id="stR" value="${esc(s.responsible||"")}"></label><label class="full">Адреса / розташування<input id="stA" value="${esc(s.address||"")}"></label></div>
+      ${fuels.length ? "" : `<p class="note">Додайте пальне в номенклатуру (категорія «Паливо»), щоб вести залишки.</p>`}`,
+    onDelete: isNew ? null : async () => remove("fuelstations", s.id),
+    onSave: async (m) => { const name = val(m,"stN"); if(!name){ m.querySelector("#stN").focus(); return false; } return !!(await save("fuelstations", Object.assign({}, s, { name, type: val(m,"stT"), warehouseId: val(m,"stW"), productId: val(m,"stP"), capacity: num(val(m,"stC"))||"", responsible: val(m,"stR"), address: val(m,"stA") }))); }
+  });
+}
+function fuelingDialog(f, preset){
+  const isNew = !f; const st0 = sorted("fuelstations")[0] || {};
+  f = f || Object.assign({ date: today(), time: new Date().toTimeString().slice(0,5), stationId: st0.id || "", productId: st0.productId || "" }, preset || {});
+  const fuels = sorted("products").filter(p => p.type === "Паливо");
+  const m = openModal({ title: isNew ? "Видача палива" : "Заправка", wide: true,
+    body: `<div class="f"><label>Дата<input id="fuD" type="date" value="${esc(f.date||"")}"></label><label>Час<input id="fuTm" type="time" value="${esc(f.time||"")}"></label>
+      <label>АЗС<select id="fuS">${opt("", "—", f.stationId)}${sorted("fuelstations").map(s => opt(s.id, s.name, f.stationId)).join("")}</select></label><label>Пальне<select id="fuP">${opt("", "—", f.productId)}${fuels.map(p => opt(p.id, p.name, f.productId)).join("")}</select></label>
+      <label>Машина<select id="fuM">${optsFrom(sorted("machines"), f.machineId, "— оберіть —")}</select></label><label>Водій<select id="fuDr">${optsFrom(sorted("people"), f.driverId, "—")}</select></label>
+      <label>Літрів<input id="fuL" inputmode="decimal" value="${esc(f.liters??"")}"></label><label>Одометр, км<input id="fuO" inputmode="decimal" value="${esc(f.odometer??"")}"></label><label>Мотогодини<input id="fuH" inputmode="decimal" value="${esc(f.motohours??"")}"></label>
+      <label>Поле<select id="fuF">${opt("", "—", f.fieldId)}${[...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true})).map(x => opt(x.id, x.name, f.fieldId)).join("")}</select></label><label>Робота<input id="fuW" value="${esc(f.work||"")}"></label>
+      <label class="full">Примітка<input id="fuN" value="${esc(f.note||"")}"></label></div><div class="note" id="fuHint"></div>`,
+    onDelete: isNew ? null : async () => remove("fuelings", f.id),
+    onSave: async (m) => { const machineId = val(m,"fuM"); if(!machineId){ m.querySelector("#fuM").focus(); return false; } if(!num(val(m,"fuL"))){ m.querySelector("#fuL").focus(); return false; }
+      return !!(await save("fuelings", Object.assign({}, f, { date: val(m,"fuD"), time: val(m,"fuTm"), stationId: val(m,"fuS"), productId: val(m,"fuP"), machineId, driverId: val(m,"fuDr"), liters: num(val(m,"fuL")), odometer: num(val(m,"fuO"))||"", motohours: num(val(m,"fuH"))||"", fieldId: val(m,"fuF"), work: val(m,"fuW"), note: val(m,"fuN") }))); }
+  });
+  const hint = () => { const mid = val(m,"fuM"); const r = mid ? machineReadings(mid) : null; const s = byId("fuelstations", val(m,"fuS")); let t = "";
+    if(r && (r.km || r.mh)) t += `Останні показники: ${r.km?fmt0(r.km)+" км":""} ${r.mh?fmt(r.mh,1)+" мотогод.":""}. `;
+    if(s && s.warehouseId && val(m,"fuP")){ const rest = stockOf(s.warehouseId, val(m,"fuP"), val(m,"fuD") || today()) + (isNew ? 0 : num(f.liters)); t += `Залишок на АЗС: ${fmt0(rest)} л.`; if(num(val(m,"fuL")) > rest) t += " Не вистачає пального!"; }
+    m.querySelector("#fuHint").textContent = t; };
+  m.addEventListener("change", hint); m.addEventListener("input", hint); hint();
+  m.querySelector("#fuS").addEventListener("change", e => { const s = byId("fuelstations", e.target.value); if(s && s.productId) m.querySelector("#fuP").value = s.productId; });
+  m.querySelector("#fuM").addEventListener("change", e => { const x = byId("machines", e.target.value); if(x && x.driverId && !val(m,"fuDr")) m.querySelector("#fuDr").value = x.driverId; });
+}
+
+/* harvest transportation, waybills, elevators */
+function viewHarvest(){
+  const T = state.harvTab || "trips";
+  const tabs = [["trips","Перевезення врожаю"],["byfield","Урожай по полях"],["waybills","Транспортні накладні"],["elevators","Зерносховища"]];
+  let body = "";
+  const trips = S.harvests.filter(h => inPeriod(h.date)).sort((a,b) => ((b.date||"")+(b.loadTime||"")).localeCompare((a.date||"")+(a.loadTime||"")));
+  if(T === "trips"){
+    body = periodBar() + `<div class="kpis"><div class="kpi"><b>${trips.length}</b><span>перевезень</span></div><div class="kpi"><b>${fmt0(sum(trips, h => h.distance))}</b><span>км сумарний пробіг</span></div><div class="kpi"><b>${fmt0(sum(trips, h => h.gross))}</b><span>кг сумарна вага</span></div><div class="kpi"><b>${fmt0(sum(trips, harvNet))}</b><span>кг сумарна вага (нетто)</span></div></div>
+    <div class="filters"><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvHarv">Excel</button><button class="btn pri" type="button" data-act="newHarv">+ Перевезення</button></div>
+    <div class="tw"><table><thead><tr><th>№</th><th>Завантажив</th><th>Час завантаження</th><th>Місце завантаження / культура</th><th>Перевантажувач</th><th>Машина</th><th>Розвантажив</th><th>Час розвантаження</th><th class="n">Відстань, км</th><th class="n">Вага, кг</th><th class="n">Вага (нетто), кг</th><th>Тривалість</th><th>Опис</th></tr></thead><tbody>
+    ${trips.length ? trips.map(h => { const f = byId("fields", h.fieldId); const dur = h.loadTime && h.unloadTime ? Math.round((new Date(h.date + "T" + h.unloadTime) - new Date(h.date + "T" + h.loadTime)) / 60000) : null;
+      return `<tr class="click" data-harv="${esc(h.id)}"><td>${esc(h.number||"")}</td><td>${esc(nameOf("machines",h.loaderId)||"—")}</td><td>${fdate(h.date)} ${esc(h.loadTime||"")}</td><td>${esc(f?f.name:(h.place||"—"))}<div class="note">${esc(h.crop || (f ? fieldCrop(f) : ""))}</div></td><td>${esc(nameOf("machines",h.reloaderId)||"—")}</td><td>${esc(nameOf("machines",h.vehicleId)||"—")}<div class="note">${esc(nameOf("people",h.driverId)||"")}</div></td><td>${esc(nameOf("elevators",h.elevatorId)||h.unloadPlace||"—")}</td><td>${esc(h.unloadTime||"")}</td><td class="n">${h.distance?fmt(num(h.distance),1):"—"}</td><td class="n">${h.gross?fmt0(num(h.gross)):"—"}</td><td class="n"><b>${harvNet(h)?fmt0(harvNet(h)):"—"}</b></td><td>${dur!=null&&dur>=0?Math.floor(dur/60)+" год "+(dur%60)+" хв":"—"}</td><td>${esc(h.note||"")}</td></tr>`; }).join("") : `<tr><td colspan="13"><div class="empty">Немає даних за вибраний період часу.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "byfield"){
+    const g = {}; S.harvests.filter(h => h.fieldId && Number(h.season || (h.date||"").slice(0,4)) === state.season).forEach(h => { const x = g[h.fieldId] ||= { n: 0, net: 0, moist: [], trash: [] }; x.n++; x.net += harvNet(h); if(num(h.moisture)) x.moist.push([num(h.moisture), harvNet(h)]); if(num(h.trash)) x.trash.push([num(h.trash), harvNet(h)]); });
+    const wavg = arr => { const w = sum(arr, a => a[1]); return w ? sum(arr, a => a[0] * a[1]) / w : 0; };
+    const rows = Object.entries(g).map(([fid, x]) => { const f = byId("fields", fid) || {}; const area = num(f.area); return { f, x, area, yld: area ? x.net / 100 / area : 0 }; }).sort((a,b) => (a.f.name||"").localeCompare(b.f.name||"","uk",{numeric:true}));
+    body = `<p class="note">Сезон ${state.season}. Урожайність = вага нетто ÷ площа поля.</p><div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="applyYield">Записати урожайність у поля</button></div>
+    ${rows.length ? `<div class="tw"><table><thead><tr><th>Поле</th><th>Культура</th><th class="n">Площа, га</th><th class="n">Рейсів</th><th class="n">Нетто, т</th><th class="n">Урожайність, ц/га</th><th class="n">Вологість, %</th><th class="n">Сміттєва домішка, %</th><th class="n">Записано в полі, ц/га</th></tr></thead><tbody>${rows.map(r => `<tr><td><b>${esc(r.f.name||"?")}</b></td><td>${cropTag(fieldCrop(r.f))}</td><td class="n">${fmt(r.area)}</td><td class="n">${r.x.n}</td><td class="n">${fmt(r.x.net/1000,2)}</td><td class="n"><b>${fmt(r.yld,2)}</b></td><td class="n">${r.x.moist.length?fmt(wavg(r.x.moist),1):"—"}</td><td class="n">${r.x.trash.length?fmt(wavg(r.x.trash),1):"—"}</td><td class="n">${fieldSeason(r.f).yield?fmt(num(fieldSeason(r.f).yield),2):"—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="card"><div class="empty">Перевезень з полів у сезоні ${state.season} немає.</div></div>`}`;
+    state._yieldRows = rows;
+  }
+  if(T === "waybills"){
+    const list = S.waybills.filter(w => inPeriod(w.date)).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = periodBar() + `<div class="filters"><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvWaybills">Експорт</button><button class="btn pri" type="button" data-act="newWaybill">+ ТТН</button></div>
+    <div class="tw"><table><thead><tr><th>Номер</th><th>Дата</th><th>Автомобіль</th><th>Водій</th><th>Вантажовідправник</th><th>Вантажоодержувач</th><th>Пункт навантаження</th><th>Пункт розвантаження</th><th>Вантаж</th><th class="n">Нетто, кг</th></tr></thead><tbody>
+    ${list.length ? list.map(w => `<tr class="click" data-waybill="${esc(w.id)}"><td><b>${esc(w.number||"")}</b></td><td>${fdate(w.date)}</td><td>${esc(nameOf("machines",w.vehicleId)||w.vehicle||"—")}<div class="note">${esc(w.trailer||"")}</div></td><td>${esc(nameOf("people",w.driverId)||"—")}</td><td>${esc(cpName(w.consignorId)||"—")}</td><td>${esc(cpName(w.consigneeId)||"—")}</td><td>${esc(nameOf("fields",w.fieldId)||w.from||"—")}</td><td>${esc(nameOf("elevators",w.elevatorId)||w.to||"—")}</td><td>${esc(w.cargo||"")}</td><td class="n">${fmt0(num(w.gross)-num(w.tare)||num(w.net))}</td></tr>`).join("") : `<tr><td colspan="10"><div class="empty">ТТН за період немає.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "elevators"){
+    const list = sorted("elevators");
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newElevator">+ Зерносховище</button></div><div class="tw"><table><thead><tr><th>Назва</th><th>Група полів</th><th>Адреса</th><th>Зовнішній ID</th><th>Додаткова інформація</th><th class="n">Прийнято за сезон, т</th></tr></thead><tbody>
+    ${list.length ? list.map(e => `<tr class="click" data-elevator="${esc(e.id)}"><td><b>${esc(e.name)}</b></td><td>${esc(e.group||"")}</td><td>${esc(e.address||"")}</td><td>${esc(e.externalId||"")}</td><td>${esc(e.note||"")}</td><td class="n">${fmt(sum(S.harvests.filter(h => h.elevatorId === e.id && Number(h.season || (h.date||"").slice(0,4)) === state.season), harvNet)/1000,2)}</td></tr>`).join("") : `<tr><td colspan="6"><div class="empty">Зерносховищ ще немає.</div></td></tr>`}</tbody></table></div>`;
+  }
+  return header("Перевезення врожаю", `<button class="btn pri" type="button" data-act="newHarv">+ Перевезення</button>`) + statusBanner() + `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-harvtab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+const harvNet = h => num(h.net) || Math.max(0, num(h.gross) - num(h.tare));
+const elevatorFields = [["name","Назва"],["group","Група полів"],["address","Адреса"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
+function harvDialog(h, preset){
+  const isNew = !h; h = h || Object.assign({ date: today(), loadTime: new Date().toTimeString().slice(0,5), season: state.season, number: String(Math.max(0, ...S.harvests.map(x => Number(x.number) || 0)) + 1) }, preset || {});
+  const fields = [...S.fields].filter(f => !f.archived || f.id === h.fieldId).sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Нове перевезення врожаю" : "Перевезення №" + (h.number || ""), wide: true,
+    body: `<div class="f"><label>№<input id="hvN" value="${esc(h.number||"")}"></label><label>Дата<input id="hvD" type="date" value="${esc(h.date||"")}"></label><label>Сезон<input id="hvS" type="number" value="${esc(h.season||state.season)}"></label>
+      <label>Завантажив (комбайн)<select id="hvL">${optsFrom(sorted("machines"), h.loaderId, "—")}</select></label><label>Час завантаження<input id="hvLT" type="time" value="${esc(h.loadTime||"")}"></label>
+      <label>Поле<select id="hvF">${opt("", "—", h.fieldId)}${fields.map(f => opt(f.id, f.name + " · " + (fieldCrop(f, h.season) || "?"), h.fieldId)).join("")}</select></label><label>Або місце завантаження<input id="hvP" value="${esc(h.place||"")}"></label>
+      <label>Культура<input id="hvC" list="cropList" value="${esc(h.crop||"")}" placeholder="з поля"></label><label>Дод. завантажувачі<input id="hvX" value="${esc(h.extraLoaders||"")}"></label>
+      <label>Перевантажувач<select id="hvR">${optsFrom(sorted("machines"), h.reloaderId, "—")}</select></label><label>Час перевантаження<input id="hvRT" type="time" value="${esc(h.reloadTime||"")}"></label>
+      <label>Машина (транспорт)<select id="hvV">${optsFrom(sorted("machines"), h.vehicleId, "—")}</select></label><label>Водій<select id="hvDr">${optsFrom(sorted("people"), h.driverId, "—")}</select></label>
+      <label>Розвантажив (зерносховище)<select id="hvE">${optsFrom(sorted("elevators"), h.elevatorId, "—")}</select></label><label>Або місце розвантаження<input id="hvU" value="${esc(h.unloadPlace||"")}"></label><label>Час розвантаження<input id="hvUT" type="time" value="${esc(h.unloadTime||"")}"></label>
+      <label>Відстань, км<input id="hvDi" inputmode="decimal" value="${esc(h.distance??"")}"></label><label>Вага брутто, кг<input id="hvG" inputmode="decimal" value="${esc(h.gross??"")}"></label><label>Тара, кг<input id="hvT" inputmode="decimal" value="${esc(h.tare??"")}"></label><label>Вага нетто, кг<input id="hvNt" inputmode="decimal" value="${esc(h.net??"")}" placeholder="брутто − тара"></label>
+      <label>Вологість, %<input id="hvMo" inputmode="decimal" value="${esc(h.moisture??"")}"></label><label>Сміттєва домішка, %<input id="hvTr" inputmode="decimal" value="${esc(h.trash??"")}"></label><label>Номер ТТН<input id="hvW" value="${esc(h.waybill||"")}"></label>
+      <label class="full">Опис<input id="hvNo" value="${esc(h.note||"")}"></label></div>${cropDatalist()}`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="hvTTN">Створити ТТН</button>`,
+    onDelete: isNew ? null : async () => remove("harvests", h.id),
+    onSave: async (m) => { const f = byId("fields", val(m,"hvF"));
+      return !!(await save("harvests", Object.assign({}, h, { number: val(m,"hvN"), date: val(m,"hvD"), season: Number(val(m,"hvS")) || state.season, loaderId: val(m,"hvL"), loadTime: val(m,"hvLT"), fieldId: val(m,"hvF"), place: val(m,"hvP"), crop: val(m,"hvC") || (f ? fieldCrop(f, Number(val(m,"hvS")) || state.season) : ""), extraLoaders: val(m,"hvX"), reloaderId: val(m,"hvR"), reloadTime: val(m,"hvRT"), vehicleId: val(m,"hvV"), driverId: val(m,"hvDr"), elevatorId: val(m,"hvE"), unloadPlace: val(m,"hvU"), unloadTime: val(m,"hvUT"), distance: num(val(m,"hvDi"))||"", gross: num(val(m,"hvG"))||"", tare: num(val(m,"hvT"))||"", net: num(val(m,"hvNt"))||"", moisture: num(val(m,"hvMo"))||"", trash: num(val(m,"hvTr"))||"", waybill: val(m,"hvW"), note: val(m,"hvNo") }))); }
+  });
+  const t = m.querySelector("#hvTTN"); if(t) t.onclick = () => { closeModal(); waybillDialog(null, { date: h.date, vehicleId: h.vehicleId, driverId: h.driverId, fieldId: h.fieldId, elevatorId: h.elevatorId, cargo: h.crop, gross: h.gross, tare: h.tare, net: h.net, number: h.waybill, consignorId: (S.owners.find(o => o.isOwn) || {}).id }); };
+}
+function waybillDialog(w, preset){
+  const isNew = !w; w = w || Object.assign({ date: today() }, preset || {});
+  openModal({ title: isNew ? "Нова товарно-транспортна накладна" : "ТТН " + (w.number || ""), wide: true,
+    body: `<div class="f"><label>Номер ТТН<input id="wbN" value="${esc(w.number||"")}"></label><label>Дата<input id="wbD" type="date" value="${esc(w.date||"")}"></label>
+      <label>Автомобіль<select id="wbV">${optsFrom(sorted("machines"), w.vehicleId, "—")}</select></label><label>Причіп / напівпричіп<input id="wbTr" value="${esc(w.trailer||"")}"></label><label>Водій<select id="wbDr">${optsFrom(sorted("people"), w.driverId, "—")}</select></label><label>Перевізник<input id="wbC" value="${esc(w.carrier||"")}"></label>
+      <label>Вантажовідправник<select id="wbFr">${cpOptions(w.consignorId)}</select></label><label>Вантажоодержувач<select id="wbTo">${cpOptions(w.consigneeId)}</select></label>
+      <label>Пункт навантаження (поле)<select id="wbF">${opt("", "—", w.fieldId)}${[...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true})).map(f => opt(f.id, f.name, w.fieldId)).join("")}</select></label><label>або адреса<input id="wbFA" value="${esc(w.from||"")}"></label>
+      <label>Пункт розвантаження<select id="wbE">${optsFrom(sorted("elevators"), w.elevatorId, "—")}</select></label><label>або адреса<input id="wbTA" value="${esc(w.to||"")}"></label>
+      <label>Вантаж<input id="wbCg" list="cropList" value="${esc(w.cargo||"")}"></label><label>Брутто, кг<input id="wbG" inputmode="decimal" value="${esc(w.gross??"")}"></label><label>Тара, кг<input id="wbT" inputmode="decimal" value="${esc(w.tare??"")}"></label><label>Нетто, кг<input id="wbNt" inputmode="decimal" value="${esc(w.net??"")}"></label>
+      <label class="full">Примітка<input id="wbNo" value="${esc(w.note||"")}"></label></div>${cropDatalist()}`,
+    onDelete: isNew ? null : async () => remove("waybills", w.id),
+    onSave: async (m) => !!(await save("waybills", Object.assign({}, w, { number: val(m,"wbN"), date: val(m,"wbD"), vehicleId: val(m,"wbV"), trailer: val(m,"wbTr"), driverId: val(m,"wbDr"), carrier: val(m,"wbC"), consignorId: val(m,"wbFr"), consigneeId: val(m,"wbTo"), fieldId: val(m,"wbF"), from: val(m,"wbFA"), elevatorId: val(m,"wbE"), to: val(m,"wbTA"), cargo: val(m,"wbCg"), gross: num(val(m,"wbG"))||"", tare: num(val(m,"wbT"))||"", net: num(val(m,"wbNt"))||"", note: val(m,"wbNo") })))
+  });
+}
+async function applyYieldToFields(){
+  const rows = state._yieldRows || []; let n = 0;
+  for(const r of rows){ if(!r.f.id || !r.yld) continue; const seasons = Object.assign({}, r.f.seasons || {}); seasons[state.season] = Object.assign({}, seasons[state.season] || {}, { yield: +r.yld.toFixed(2) }); await save("fields", Object.assign({}, r.f, { seasons })); n++; }
+  toast(n ? `Урожайність записано в ${n} полів` : "Немає даних для запису");
+}
+
+function techAction(a, d){
+  if(a === "newPlan"){ mplanDialog(null); return true; }
+  if(a === "planService"){ const p = byId("mplans", d.plan); serviceDialog(null, { machineId: d.machine, kind: p ? p.name : "", planId: d.plan, note: p ? (p.works || "") : "" }); return true; }
+  if(a === "newNorm"){ normDialog(null); return true; }
+  if(a === "newStation"){ stationDialog(null); return true; }
+  if(a === "newFueling"){ fuelingDialog(null); return true; }
+  if(a === "newHarv"){ harvDialog(null); return true; }
+  if(a === "newWaybill"){ waybillDialog(null); return true; }
+  if(a === "newElevator"){ simpleDialog("elevators", null, "зерносховище", elevatorFields); return true; }
+  if(a === "applyYield"){ applyYieldToFields(); return true; }
+  if(a === "csvFuel"){ exportCsv("Видача палива", ["Дата","Час","АЗС","Машина","Водій","Пальне","Літрів","Одометр","Мотогодини","Поле","Робота","Примітка"], S.fuelings.filter(f => inPeriod(f.date)).map(f => [f.date, f.time, nameOf("fuelstations",f.stationId), nameOf("machines",f.machineId), nameOf("people",f.driverId), prodName(f.productId), f.liters, f.odometer, f.motohours, nameOf("fields",f.fieldId), f.work, f.note])); return true; }
+  if(a === "csvHarv"){ exportCsv("Перевезення врожаю", ["№","Дата","Завантажив","Час завантаження","Поле / місце","Культура","Перевантажувач","Машина","Водій","Розвантажив","Час розвантаження","Відстань, км","Вага, кг","Тара, кг","Нетто, кг","Вологість, %","Сміттєва домішка, %","ТТН","Опис"], S.harvests.filter(h => inPeriod(h.date)).map(h => [h.number, h.date, nameOf("machines",h.loaderId), h.loadTime, nameOf("fields",h.fieldId) || h.place, h.crop, nameOf("machines",h.reloaderId), nameOf("machines",h.vehicleId), nameOf("people",h.driverId), nameOf("elevators",h.elevatorId) || h.unloadPlace, h.unloadTime, h.distance, h.gross, h.tare, harvNet(h), h.moisture, h.trash, h.waybill, h.note])); return true; }
+  if(a === "csvWaybills"){ exportCsv("ТТН", ["Номер","Дата","Автомобіль","Причіп","Водій","Перевізник","Вантажовідправник","Вантажоодержувач","Пункт навантаження","Пункт розвантаження","Вантаж","Брутто","Тара","Нетто"], S.waybills.filter(w => inPeriod(w.date)).map(w => [w.number, w.date, nameOf("machines",w.vehicleId), w.trailer, nameOf("people",w.driverId), w.carrier, cpName(w.consignorId), cpName(w.consigneeId), nameOf("fields",w.fieldId) || w.from, nameOf("elevators",w.elevatorId) || w.to, w.cargo, w.gross, w.tare, num(w.net) || (num(w.gross) - num(w.tare))])); return true; }
+  return false;
+}
+
+function fuelDocs(){ return S.fuelings.map(f => { const s = byId("fuelstations", f.stationId); if(!s || !s.warehouseId || !f.productId) return null; return { kind: "issue", status: "posted", date: f.date, createdAt: (f.date||"") + (f.time||""), from: s.warehouseId, machineId: f.machineId, fieldId: f.fieldId, purpose: "Видача палива", number: "АЗС " + (s.name||""), lines: [{ productId: f.productId, qty: num(f.liters) }] }; }).filter(Boolean); }
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2090,7 +2356,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewService, refs:viewRefs, reports:viewReports };
+const VIEWS = { fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -2109,7 +2375,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2129,6 +2395,7 @@ main.addEventListener("click", e => {
     if(a==="newService") return serviceDialog(null, d.machine ? { machineId: d.machine } : {});
     if(landAction(a, d)) return;
     if(wmsAction(a, d)) return;
+    if(techAction(a, d)) return;
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -2144,6 +2411,17 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.svctab){ state.svcTab = d.svctab; return render(); }
+  if(d.fueltab){ state.fuelTab = d.fueltab; return render(); }
+  if(d.harvtab){ state.harvTab = d.harvtab; return render(); }
+  if(d.mplan) return mplanDialog(byId("mplans", d.mplan));
+  if(d.norm) return normDialog(byId("norms", d.norm));
+  if(d.fueling) return fuelingDialog(byId("fuelings", d.fueling));
+  if(d.station) return stationDialog(byId("fuelstations", d.station));
+  if(d.harv) return harvDialog(byId("harvests", d.harv));
+  if(d.waybill) return waybillDialog(byId("waybills", d.waybill));
+  if(d.elevator) return simpleDialog("elevators", byId("elevators", d.elevator), "зерносховище", elevatorFields);
+  if(d.machineOpen){ state.machineId = d.machineOpen; location.hash = "machines"; return; }
   if(d.wmstab){ state.wmsTab = d.wmstab; return render(); }
   if(d.wmsrep){ state.wmsRep = d.wmsrep; return render(); }
   if(d.whdoc) return whDocDialog(byId("whdocs", d.whdoc));
@@ -2182,6 +2460,7 @@ main.addEventListener("change", e => {
   if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
   if(id==="og"){ state.ops.group = e.target.value; render(); }
   if(id==="lc"){ state.landCouncil = e.target.value; render(); }
+  if(id==="fuelSt"){ state.fuelSt = e.target.value; render(); }
   if(id==="whSel"){ state.whSel = e.target.value; render(); }
   if(id==="stockDate"){ state.stockDate = e.target.value; render(); }
   if(id==="itemCat"){ state.itemCat = e.target.value; render(); }
@@ -2196,7 +2475,7 @@ document.addEventListener("click", e => { if(e.target.id === "menuBtn") document
 document.addEventListener("keydown", e => { if(e.key === "Escape" && document.getElementById("modalRoot").innerHTML) closeModal(); });
 
 /* attach the files block to dialogs of saved records */
-[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["opDialog","ops"]].forEach(([fn, col]) => {
+[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["harvDialog","harvests"],["waybillDialog","waybills"],["fuelingDialog","fuelings"],["opDialog","ops"]].forEach(([fn, col]) => {
   const orig = window[fn];
   window[fn] = function(rec, ...rest){ const r = orig.call(this, rec, ...rest); if(rec && rec.id) attachFiles(lastModal(), col, rec.id); return r; };
 });
