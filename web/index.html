@@ -175,6 +175,7 @@ tr:last-child td{border-bottom:0}
     <a href="#fields" data-v="fields">Поля і карта</a>
     <a href="#rotation" data-v="rotation">Сівозміна</a>
     <a href="#ops" data-v="ops">Агрооперації</a>
+    <a href="#scout" data-v="scout">Огляди полів</a>
     <div class="sec">Техніка</div>
     <a href="#machines" data-v="machines">Машини</a>
     <a href="#tasks" data-v="tasks">Завдання техніки</a>
@@ -217,7 +218,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -236,7 +237,7 @@ const state = {
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
   landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
-  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips",
+  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips", scoutTab: "reports",
   mapVB: {}
 };
 
@@ -428,6 +429,8 @@ function addLayers(M){
   map.addLayer({ id: "p-fill", type: "fill", source: "parcels", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.22 } });
   map.addLayer({ id: "p-line", type: "line", source: "parcels", paint: { "line-color": ["get", "color"], "line-width": 1.6, "line-dasharray": [3, 1.5] } });
   map.addLayer({ id: "p-sel", type: "line", source: "parcels", filter: ["==", ["get", "pid"], ""], paint: { "line-color": "#ff3b30", "line-width": 3 } });
+  map.addSource("points", { type: "geojson", data: EMPTY_FC });
+  map.addLayer({ id: "pt", type: "circle", source: "points", paint: { "circle-radius": 6, "circle-color": ["get", "color"], "circle-stroke-color": "#000", "circle-stroke-width": 1.2 } });
   map.addSource("draw", { type: "geojson", data: EMPTY_FC });
   map.addLayer({ id: "d-fill", type: "fill", source: "draw", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#ffd60a", "fill-opacity": 0.25 } });
   map.addLayer({ id: "d-line", type: "line", source: "draw", filter: ["!=", ["geometry-type"], "Point"], paint: { "line-color": "#ffd60a", "line-width": 2.5, "line-dasharray": [2, 1] } });
@@ -439,6 +442,7 @@ function updateMapData(M){
   if(!src) return;
   src.setData(fieldsGeo(M.fields));
   map.setFilter("f-sel", ["==", ["get", "fid"], state.fieldSel || ""]);
+  const pts = map.getSource("points"); if(pts) pts.setData(pointsGeo());
   const ps = map.getSource("parcels"); if(ps){ ps.setData(parcelsGeo(M.parcels || [])); map.setFilter("p-sel", ["==", ["get", "pid"], state.parcelSel || ""]); }
   updateDraw(M);
   const note = M.el.querySelector(".mapnote");
@@ -481,6 +485,8 @@ function createMap(key){
     const p = e.features[0].properties;
     popup.setLngLat(e.lngLat).setHTML(`<b>${esc(p.name)}</b><br>${esc(p.group)} · ${fmt(Number(p.area))} га<br>${esc(p.crop || "культура не вказана")}${p.variety ? ", " + esc(p.variety) : ""}`).addTo(map);
   });
+  map.on("mousemove", "pt", e => { if(M.draw) return; map.getCanvas().style.cursor = "pointer"; popup.setLngLat(e.lngLat).setHTML(`<b>${esc(e.features[0].properties.title)}</b>`).addTo(map); });
+  map.on("mouseleave", "pt", () => { map.getCanvas().style.cursor = M.draw || M.pick ? "crosshair" : ""; popup.remove(); });
   map.on("mouseleave", "f-fill", () => { map.getCanvas().style.cursor = M.draw ? "crosshair" : ""; popup.remove(); });
   map.on("mousemove", "p-fill", e => {
     if(M.draw) return;
@@ -491,6 +497,9 @@ function createMap(key){
   });
   map.on("mouseleave", "p-fill", () => { map.getCanvas().style.cursor = M.draw ? "crosshair" : ""; popup.remove(); });
   map.on("click", e => {
+    if(M.pick){ const cb = M.pick; M.pick = null; map.getCanvas().style.cursor = ""; cb([+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)]); return; }
+    const pth = map.queryRenderedFeatures(e.point, { layers: ["pt"] })[0];
+    if(pth && !M.draw){ const pp = pth.properties; if(pp.kind === "note") noteDialog(byId("notes", pp.id)); else scoutDialog(byId("scoutreports", pp.id)); return; }
     if(M.draw){ M.draw.pts.push([+e.lngLat.lng.toFixed(7), +e.lngLat.lat.toFixed(7)]); updateDraw(M); return; }
     const ph = map.queryRenderedFeatures(e.point, { layers: ["p-fill"] })[0];
     if(ph && M.parcelsFirst){ pickParcel(ph.properties.pid); return; }
@@ -699,6 +708,8 @@ function fieldCard(f){
     </dl>
     ${years.length?`<h2 style="margin-top:16px">Історія культур</h2><div class="legend">${years.map(y=>`<span><b>${y}</b> ${cropTag(f.seasons[y].crop)}</span>`).join("")}</div>`:""}
     ${(() => { const ps = S.parcels.filter(p => (p.fieldIds||[]).includes(f.id)); return ps.length ? `<h2 style="margin-top:16px">Земельні ділянки (${ps.length}) · ${fmt(sum(ps,p=>p.area),2)} га</h2><div class="tw"><table><tbody>${ps.map(p => { const l = parcelActiveLease(p); return `<tr class="click" data-parcel="${esc(p.id)}"><td>${esc(p.cadastre||"—")}<div class="note">${esc(nameOf("owners",p.ownerId)||"")}</div></td><td class="n">${fmt(num(p.area),4)} га</td><td>${l?leasePill(l)+`<div class="note">до ${fdate(l.dateTo)}</div>`:`<span class="pill st-cancel">${esc(parcelStatus(p))}</span>`}</td></tr>`; }).join("")}</tbody></table></div>` : ""; })()}
+    ${(() => { const rs = S.scoutreports.filter(r => r.fieldId === f.id).sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5); return `<h2 style="margin-top:16px">Останні звіти оглядів <button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button></h2>` + (rs.length ? `<div class="tw"><table><tbody>${rs.map(r => `<tr class="click" data-scout="${esc(r.id)}"><td>${fdate(r.date)}</td><td>${esc(r.stage||"")}</td><td>${(r.threats||[]).map(t => esc(nameOf("plantthreats", t.threatId)||"") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ") || esc((r.note||"").slice(0,60))}</td><td>${esc(r.author||"")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Оглядів ще не було.</p>`); })()}
+    <h2 style="margin-top:16px">Погода</h2><div id="wxBox" data-fid="${esc(f.id)}">${f.contours ? `<p class="note">Завантажую погоду…</p>` : `<p class="note">Погода з’явиться, коли в поля буде контур.</p>`}</div>
     <h2 style="margin-top:16px">Агрооперації (${ops.length})</h2>
     ${ops.length ? `<div class="tw"><table><tbody>${ops.slice(0,15).map(o=>`<tr class="click" data-op="${esc(o.id)}"><td>${esc(opTitle(o))}<div class="note">сезон ${esc(o.season)} · ${fdate(o.factFrom||o.plannedFrom)}</div></td><td>${statusPill(o.status)}</td><td class="n">${fmt(opDone(o))} / ${fmt(opPlanned(o))} га</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Ще немає.</p>`}
   </div>`;
@@ -1055,7 +1066,8 @@ function simpleDialog(col, x, title, fields){
     onSave: async (m) => { const o = Object.assign({}, x); for(const [k,,kind] of fields){ const v = val(m,"s_"+k); o[k] = kind==="num" ? (v?num(v):"") : v; } if(!o.name){ m.querySelector("#s_name").focus(); return false; } return !!(await save(col, o)); }
   });
 }
-const productFields = [["name","Назва"],["type","Тип","select",PRODUCT_TYPES],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
+const PRODUCT_SUBTYPES = ["Гербіцид","Фунгіцид","Інсектицид","Акарицид","Десикант","Протруйник","Ад’ювант","Регулятор росту","Біологічні добавки","Мікродобрива","Мінеральні добрива","Органічні добрива","Насіння","Дизельне паливо","Бензин","Мастила","Запчастина","Інше"];
+const productFields = [["name","Назва"],["type","Категорія","select",PRODUCT_TYPES],["subtype","Тип / клас","select",PRODUCT_SUBTYPES],["formulation","Препаративна форма"],["crop","Культура (для насіння)"],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
 const implFields = [["name","Назва"],["type","Тип"],["width","Ширина захвату, м","num"],["inv","Інвентарний номер"],["note","Примітка","area"]];
 const personFields = [["name","ПІБ"],["role","Посада","select",PEOPLE_ROLES],["phone","Телефон"],["note","Примітка","area"]];
 
@@ -2292,6 +2304,147 @@ function techAction(a, d){
 
 function fuelDocs(){ return S.fuelings.map(f => { const s = byId("fuelstations", f.stationId); if(!s || !s.warehouseId || !f.productId) return null; return { kind: "issue", status: "posted", date: f.date, createdAt: (f.date||"") + (f.time||""), from: s.warehouseId, machineId: f.machineId, fieldId: f.fieldId, purpose: "Видача палива", number: "АЗС " + (s.name||""), lines: [{ productId: f.productId, qty: num(f.liters) }] }; }).filter(Boolean); }
 
+/* ---------- agronomy: scouting, notes, plant threats, weather ---------- */
+const THREAT_TYPES = ["Хвороба","Шкідник","Бур’ян","Абіотичний стрес","Інше"];
+const SCOUT_STATUS = { new: ["Нове","st-planned"], work: ["В роботі","st-progress"], done: ["Виконано","st-done"], cancel: ["Скасовано","st-cancel"] };
+const NOTE_CATS = ["Загальна","Пошкодження","Бур’яни","Шкідники","Хвороби","Техніка","Інфраструктура","Межа поля"];
+const BBCH = ["00 Проростання","10 Сходи / перший лист","13 Три листки","21 Кущення","30 Вихід у трубку","39 Прапорцевий лист","51 Колосіння / бутонізація","61 Цвітіння","71 Формування зерна","85 Воскова стиглість","89 Повна стиглість","99 Збирання"];
+function fieldCenter(f){ if(!f || !f.contours || !f.contours.length) return null; let x = 0, y = 0, n = 0; f.contours.forEach(r => r.forEach(p => { x += p[0]; y += p[1]; n++; })); return n ? [x / n, y / n] : null; }
+function startPick(key, cb){ const M = MAPS[key]; if(!M || !M.map.getCanvas){ toast("Відкрийте карту"); return; } M.pick = cb; M.map.getCanvas().style.cursor = "crosshair"; M.el.scrollIntoView({ behavior: "smooth", block: "center" }); toast("Клацніть по карті, щоб поставити точку"); }
+function pointsGeo(){
+  const feats = [];
+  S.notes.filter(n => n.point && !n.archived).forEach(n => feats.push({ type: "Feature", properties: { kind: "note", id: n.id, title: n.title || n.category || "Нотатка", color: "#ffd60a" }, geometry: { type: "Point", coordinates: n.point } }));
+  S.scoutreports.filter(r => r.point && Number((r.date||"").slice(0,4)) >= state.season - 1).forEach(r => { const sev = Math.max(0, ...(r.threats || []).map(t => num(t.severity)));
+    feats.push({ type: "Feature", properties: { kind: "scout", id: r.id, title: "Огляд " + fdate(r.date), color: sev >= 30 ? "#ff453a" : sev >= 10 ? "#ff9f0a" : "#34c759" }, geometry: { type: "Point", coordinates: r.point } }); });
+  return { type: "FeatureCollection", features: feats };
+}
+
+function viewScout(){
+  const T = state.scoutTab || "reports";
+  const tabs = [["reports","Звіти оглядів"],["tasks","Завдання на огляд"],["notes","Нотатки"],["threats","Загрози рослинам"]];
+  let body = "";
+  if(T === "reports"){
+    const list = S.scoutreports.filter(r => inPeriod(r.date)).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = periodBar() + `<div class="grid g2"><div><div class="filters"><span class="muted">${list.length} оглядів</span><span style="flex:1"></span><button class="btn sm" type="button" data-act="csvScout">Експорт</button><button class="btn pri" type="button" data-act="newScout">+ Звіт огляду</button></div>
+    <div class="tw"><table><thead><tr><th>Дата</th><th>Поле</th><th>Культура / фаза</th><th>Виявлено</th><th class="n">Макс. ураження</th><th>Автор</th></tr></thead><tbody>
+    ${list.length ? list.map(r => { const f = byId("fields", r.fieldId) || {}; const sev = Math.max(0, ...(r.threats || []).map(t => num(t.severity)));
+      return `<tr class="click" data-scout="${esc(r.id)}"><td>${fdate(r.date)}</td><td><b>${esc(f.name||"—")}</b></td><td>${cropTag(r.crop || fieldCrop(f))}<div class="note">${esc(r.stage||"")}</div></td><td>${(r.threats||[]).map(t => esc(nameOf("plantthreats", t.threatId) || t.name || "")).filter(Boolean).join(", ") || `<span class="muted">${esc(r.note ? r.note.slice(0,60) : "без проблем")}</span>`}</td><td class="n" style="color:${sev>=30?"var(--bad)":sev>=10?"var(--warn)":"inherit"}">${sev?fmt0(sev)+"%":"—"}</td><td>${esc(r.author||"")}</td></tr>`; }).join("") : `<tr><td colspan="6"><div class="empty">Оглядів за період немає.</div></td></tr>`}</tbody></table></div></div>
+    <div class="card"><h2>Карта оглядів і нотаток</h2>${mapHtml("scout", S.fields.filter(f => !f.archived))}<div class="legend"><span class="crop"><i class="dot" style="background:#34c759;border-radius:50%"></i>огляд без загроз</span><span class="crop"><i class="dot" style="background:#ff9f0a;border-radius:50%"></i>ураження 10–30%</span><span class="crop"><i class="dot" style="background:#ff453a;border-radius:50%"></i>понад 30%</span><span class="crop"><i class="dot" style="background:#ffd60a;border-radius:50%"></i>нотатка</span></div></div></div>`;
+  }
+  if(T === "tasks"){
+    const list = [...S.scouttasks].sort((a,b) => (a.status === "done") - (b.status === "done") || (a.due||"").localeCompare(b.due||""));
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newScoutTask">+ Завдання на огляд</button></div><div class="tw"><table><thead><tr><th>Статус</th><th>Термін</th><th>Поля</th><th>Мета огляду</th><th>Виконавець</th><th class="n">Звітів</th></tr></thead><tbody>
+    ${list.length ? list.map(t => { const [s, c] = SCOUT_STATUS[t.status || "new"]; const late = t.status !== "done" && t.due && t.due < today(); const reps = S.scoutreports.filter(r => r.taskId === t.id).length;
+      return `<tr class="click" data-scouttask="${esc(t.id)}"><td><span class="pill ${c}">${s}</span></td><td style="color:${late?"var(--bad)":"inherit"}">${fdate(t.due)}</td><td>${(t.fieldIds||[]).map(id => esc(nameOf("fields", id))).join(", ") || "—"}</td><td>${esc(t.purpose||"")}</td><td>${esc(t.assignee||"")}</td><td class="n">${reps||"—"}</td></tr>`; }).join("") : `<tr><td colspan="6"><div class="empty">Завдань на огляд немає.</div></td></tr>`}</tbody></table></div>`;
+  }
+  if(T === "notes"){
+    const list = S.notes.filter(n => !n.archived).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+    body = `<div class="grid g2"><div><div class="filters"><span style="flex:1"></span><button class="btn" type="button" data-act="noteOnMap">+ Нотатка на карті</button><button class="btn pri" type="button" data-act="newNote">+ Нотатка</button></div>
+    <div class="tw"><table><thead><tr><th>Дата</th><th>Категорія</th><th>Нотатка</th><th>Поле</th><th>Автор</th></tr></thead><tbody>
+    ${list.length ? list.map(n => `<tr class="click" data-note="${esc(n.id)}"><td>${fdate(n.date)}</td><td>${esc(n.category||"")}</td><td><b>${esc(n.title||"")}</b><div class="note">${esc((n.text||"").slice(0,120))}</div></td><td>${esc(nameOf("fields", n.fieldId)||"—")}</td><td>${esc(n.author||"")}</td></tr>`).join("") : `<tr><td colspan="5"><div class="empty">Нотаток немає.</div></td></tr>`}</tbody></table></div></div>
+    <div class="card"><h2>Нотатки на карті</h2>${mapHtml("scout", S.fields.filter(f => !f.archived))}</div></div>`;
+  }
+  if(T === "threats"){
+    const list = sorted("plantthreats");
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newThreat">+ Загроза</button></div><div class="tw"><table><thead><tr><th>Назва</th><th>Тип</th><th>Культури</th><th class="n">Поріг шкідливості, %</th><th>Рекомендовані препарати</th><th class="n">Виявлень</th></tr></thead><tbody>
+    ${list.length ? list.map(t => `<tr class="click" data-threat="${esc(t.id)}"><td><b>${esc(t.name)}</b></td><td>${esc(t.type||"")}</td><td>${esc(t.crops||"")}</td><td class="n">${t.threshold?fmt(num(t.threshold),1):"—"}</td><td>${esc(t.products||"")}</td><td class="n">${S.scoutreports.filter(r => (r.threats||[]).some(x => x.threatId === t.id)).length || "—"}</td></tr>`).join("") : `<tr><td colspan="6"><div class="empty">Довідник загроз порожній.</div></td></tr>`}</tbody></table></div>`;
+  }
+  return header("Огляди полів", `<button class="btn pri" type="button" data-act="newScout">+ Звіт огляду</button>`) + statusBanner() + `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-scouttab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+const threatFields = [["name","Назва"],["type","Тип","select",THREAT_TYPES],["crops","Культури"],["threshold","Економічний поріг шкідливості, %","num"],["products","Рекомендовані препарати"],["note","Опис","area"]];
+function threatRow(t){ t = t || {};
+  return `<div class="approw tr" style="grid-template-columns:2fr 90px 2fr 32px"><select class="tT" aria-label="Загроза">${opt("", "— загроза —", t.threatId)}${THREAT_TYPES.map(g => { const ts = sorted("plantthreats").filter(x => (x.type||"Інше") === g); return ts.length ? `<optgroup label="${esc(g)}">${ts.map(x => opt(x.id, x.name, t.threatId)).join("")}</optgroup>` : ""; }).join("")}</select>
+  <input class="tS" inputmode="decimal" placeholder="% ураж." value="${esc(t.severity??"")}" aria-label="Ураження, %"><input class="tN" placeholder="коментар" value="${esc(t.note||"")}" aria-label="Коментар"><button class="btn sm tX" type="button" aria-label="Прибрати">×</button></div>`; }
+function scoutDialog(r, preset){
+  const isNew = !r; r = r || Object.assign({ date: today(), threats: [] }, preset || {});
+  const fields = [...S.fields].filter(f => !f.archived || f.id === r.fieldId).sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Новий звіт огляду поля" : "Огляд " + (nameOf("fields", r.fieldId) || "") + " · " + fdate(r.date), wide: true,
+    body: `<div class="f"><label>Поле<select id="scF">${opt("", "— оберіть —", r.fieldId)}${fields.map(f => opt(f.id, f.name + " · " + (fieldCrop(f) || ""), r.fieldId)).join("")}</select></label><label>Дата<input id="scD" type="date" value="${esc(r.date||"")}"></label>
+      <label>Автор<input id="scA" value="${esc(r.author||"")}"></label><label>Фаза розвитку (BBCH)<input id="scSt" list="bbchList" value="${esc(r.stage||"")}"></label>
+      <label>Густота стеблостою, тис. рослин/га<input id="scDen" inputmode="decimal" value="${esc(r.density??"")}"></label><label>Вологість ґрунту (оцінка)<select id="scMo">${optsFrom(["Суха","Достатня","Перезволожена"], r.moisture, "—")}</select></label>
+      <label>Завдання на огляд<select id="scTk">${opt("", "—", r.taskId)}${S.scouttasks.filter(t => t.status !== "done" || t.id === r.taskId).map(t => opt(t.id, (t.purpose || "Огляд") + " · до " + fdate(t.due), r.taskId)).join("")}</select></label>
+      <label>Точка огляду<input id="scPt" value="${r.point ? r.point.map(v => v.toFixed(6)).join(", ") : ""}" placeholder="центр поля"></label>
+      <label class="full">Висновки і рекомендації<textarea id="scN">${esc(r.note||"")}</textarea></label></div><datalist id="bbchList">${BBCH.map(b => `<option value="${esc(b)}">`).join("")}</datalist>
+    <div><b>Виявлені загрози</b><div class="apps" id="scT" style="margin-top:6px">${(r.threats||[]).map(threatRow).join("")}</div><button class="btn sm" type="button" id="scAdd" style="margin-top:6px">+ Загроза</button>${S.plantthreats.length ? "" : ` <span class="note">Спершу заповніть довідник «Загрози рослинам».</span>`}</div>
+    ${isNew ? `<p class="note">Фото можна прикріпити після збереження звіту.</p>` : ""}`,
+    onDelete: isNew ? null : async () => remove("scoutreports", r.id),
+    onSave: async (m) => { const fieldId = val(m,"scF"); if(!fieldId){ m.querySelector("#scF").focus(); return false; } const f = byId("fields", fieldId);
+      const pt = val(m,"scPt").split(/[,; ]+/).map(Number).filter(isFinite); const point = pt.length === 2 ? (Math.abs(pt[0]) > 40 ? [pt[1], pt[0]] : pt) : fieldCenter(f);
+      const threats = [...m.querySelectorAll("#scT .tr")].map(x => ({ threatId: x.querySelector(".tT").value, severity: num(x.querySelector(".tS").value), note: x.querySelector(".tN").value.trim() })).filter(t => t.threatId || t.note);
+      const taskId = val(m,"scTk");
+      const id = await save("scoutreports", Object.assign({}, r, { fieldId, date: val(m,"scD"), author: val(m,"scA"), stage: val(m,"scSt"), density: num(val(m,"scDen"))||"", moisture: val(m,"scMo"), taskId, point, note: val(m,"scN"), threats, crop: fieldCrop(f, Number(val(m,"scD").slice(0,4)) || state.season) || fieldCrop(f) }));
+      if(id && taskId){ const t = byId("scouttasks", taskId); if(t && t.status === "new") await save("scouttasks", Object.assign({}, t, { status: "work" })); }
+      return !!id; }
+  });
+  m.querySelector("#scAdd").onclick = () => m.querySelector("#scT").insertAdjacentHTML("beforeend", threatRow());
+  m.querySelector("#scT").addEventListener("click", e => { if(e.target.classList.contains("tX")) e.target.closest(".tr").remove(); });
+}
+function scoutTaskDialog(t){
+  const isNew = !t; t = t || { status: "new", due: today(), fieldIds: [] };
+  const fields = [...S.fields].filter(f => !f.archived).sort((a,b)=>(a.group||"").localeCompare(b.group||"","uk")||a.name.localeCompare(b.name,"uk",{numeric:true}));
+  openModal({ title: isNew ? "Нове завдання на огляд" : "Завдання на огляд", wide: true,
+    body: `<div class="f"><label>Мета огляду<input id="stP" value="${esc(t.purpose||"")}" placeholder="напр. облік шкідників, оцінка перезимівлі"></label><label>Термін<input id="stD" type="date" value="${esc(t.due||"")}"></label>
+      <label>Виконавець<input id="stA" value="${esc(t.assignee||"")}"></label><label>Статус<select id="stS">${Object.entries(SCOUT_STATUS).map(([k,v]) => opt(k, v[0], t.status)).join("")}</select></label>
+      <label class="full">Поля<div class="checks">${fields.map(f => `<label><input type="checkbox" name="stF" value="${esc(f.id)}" ${(t.fieldIds||[]).includes(f.id)?"checked":""}>${esc(f.name)} <span class="muted">${esc(fieldCrop(f)||"")}</span></label>`).join("") || `<span class="note">Полів ще немає</span>`}</div></label>
+      <label class="full">Інструкції<textarea id="stN">${esc(t.note||"")}</textarea></label></div>`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="stRep">+ Звіт за завданням</button>`,
+    onDelete: isNew ? null : async () => remove("scouttasks", t.id),
+    onSave: async (m) => !!(await save("scouttasks", Object.assign({}, t, { purpose: val(m,"stP"), due: val(m,"stD"), assignee: val(m,"stA"), status: val(m,"stS"), fieldIds: checked(m,"stF"), note: val(m,"stN") })))
+  });
+  const b = document.getElementById("stRep"); if(b) b.onclick = () => { closeModal(); scoutDialog(null, { taskId: t.id, fieldId: (t.fieldIds||[])[0] || "", author: t.assignee || "" }); };
+}
+function noteDialog(n, preset){
+  const isNew = !n; n = n || Object.assign({ date: today(), category: "Загальна" }, preset || {});
+  openModal({ title: isNew ? "Нова нотатка" : (n.title || "Нотатка"), wide: true,
+    body: `<div class="f"><label>Заголовок<input id="ntT" value="${esc(n.title||"")}"></label><label>Категорія<select id="ntC">${optsFrom(NOTE_CATS, n.category)}</select></label><label>Дата<input id="ntD" type="date" value="${esc(n.date||"")}"></label><label>Автор<input id="ntA" value="${esc(n.author||"")}"></label>
+      <label>Поле<select id="ntF">${opt("", "—", n.fieldId)}${[...S.fields].sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true})).map(f => opt(f.id, f.name, n.fieldId)).join("")}</select></label><label>Точка<input id="ntP" value="${n.point ? n.point.map(v => v.toFixed(6)).join(", ") : ""}" placeholder="довгота, широта"></label>
+      <label class="full">Текст<textarea id="ntX" style="min-height:100px">${esc(n.text||"")}</textarea></label><label><span><input type="checkbox" id="ntAr" ${n.archived?"checked":""}> В архіві</span></label></div>${isNew ? `<p class="note">Фото можна прикріпити після збереження.</p>` : ""}`,
+    onDelete: isNew ? null : async () => remove("notes", n.id),
+    onSave: async (m) => { const pt = val(m,"ntP").split(/[,; ]+/).map(Number).filter(isFinite); const f = byId("fields", val(m,"ntF"));
+      return !!(await save("notes", Object.assign({}, n, { title: val(m,"ntT") || val(m,"ntC"), category: val(m,"ntC"), date: val(m,"ntD"), author: val(m,"ntA"), fieldId: val(m,"ntF"), point: pt.length === 2 ? (Math.abs(pt[0]) > 40 ? [pt[1], pt[0]] : pt) : (n.point || fieldCenter(f)), text: val(m,"ntX"), archived: m.querySelector("#ntAr").checked }))); }
+  });
+}
+
+/* weather (Open-Meteo through the worker) */
+const weatherCache = {};
+function wmo(code){ const c = Number(code); if(c === 0) return "Ясно"; if(c <= 2) return "Мінлива хмарність"; if(c === 3) return "Хмарно"; if(c <= 48) return "Туман"; if(c <= 57) return "Мряка"; if(c <= 67) return "Дощ"; if(c <= 77) return "Сніг"; if(c <= 82) return "Злива"; if(c <= 86) return "Снігопад"; return "Гроза"; }
+async function loadWeather(f){
+  const c = fieldCenter(f); if(!c) return null;
+  const key = c.map(v => v.toFixed(2)).join(",") + "|" + (fieldSeason(f).sowDate || "");
+  if(weatherCache[key] && Date.now() - weatherCache[key].t < 3600e3) return weatherCache[key].d;
+  const sow = fieldSeason(f).sowDate || "";
+  const d = await api("/weather?lat=" + c[1].toFixed(4) + "&lon=" + c[0].toFixed(4) + (sow ? "&from=" + sow : ""));
+  weatherCache[key] = { t: Date.now(), d }; return d;
+}
+function weatherHtml(d, f){
+  if(!d || !d.forecast || !d.forecast.daily) return `<p class="note">Погода недоступна.</p>`;
+  const fc = d.forecast, cur = fc.current || {}, dl = fc.daily;
+  const hist = d.history && d.history.daily ? d.history.daily : null;
+  let gdd5 = 0, gdd10 = 0, rainSow = 0;
+  if(hist){ hist.time.forEach((t, i) => { const avg = (num(hist.temperature_2m_max[i]) + num(hist.temperature_2m_min[i])) / 2; gdd5 += Math.max(0, avg - 5); gdd10 += Math.max(0, avg - 10); rainSow += num(hist.precipitation_sum[i]); }); }
+  const past = (dl.time || []).map((t, i) => [t, num(dl.precipitation_sum[i])]).filter(([t]) => t < today());
+  const rain7 = sum(past.slice(-7), x => x[1]), rain30 = sum(past.slice(-30), x => x[1]);
+  const fut = (dl.time || []).map((t, i) => ({ t, max: dl.temperature_2m_max[i], min: dl.temperature_2m_min[i], p: dl.precipitation_sum[i], w: dl.wind_speed_10m_max[i], c: dl.weather_code[i] })).filter(x => x.t >= today()).slice(0, 7);
+  return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><b>${cur.temperature_2m != null ? fmt(cur.temperature_2m, 0) + "°" : "—"}</b><span>${esc(wmo(cur.weather_code))} · вітер ${cur.wind_speed_10m != null ? fmt(cur.wind_speed_10m / 3.6, 1) : "—"} м/с</span></div><div class="kpi"><b>${fmt(rain7, 0)} / ${fmt(rain30, 0)}</b><span>мм опадів за 7 / 30 днів</span></div>
+  ${hist ? `<div class="kpi"><b>${fmt0(gdd5)}° / ${fmt0(gdd10)}°</b><span>сума ефективних температур з дати сівби (>5° / >10°)</span></div><div class="kpi"><b>${fmt0(rainSow)}</b><span>мм опадів з дати сівби</span></div>` : ""}</div>
+  <div class="tw"><table><thead><tr><th>Дата</th><th>Погода</th><th class="n">Макс / мін, °C</th><th class="n">Опади, мм</th><th class="n">Вітер, м/с</th><th>Обприскування</th></tr></thead><tbody>${fut.map(x => { const wind = num(x.w) / 3.6; const ok = wind <= 5 && num(x.p) < 1 && num(x.max) <= 25;
+    return `<tr><td>${fdate(x.t)}</td><td>${esc(wmo(x.c))}</td><td class="n">${fmt(x.max,0)} / ${fmt(x.min,0)}</td><td class="n">${num(x.p)?fmt(num(x.p),1):"—"}</td><td class="n">${fmt(wind,1)}</td><td><span class="pill ${ok?"st-done":"st-progress"}">${ok?"сприятливо":"обмежено"}</span></td></tr>`; }).join("")}</tbody></table></div>
+  <p class="note">Дані Open-Meteo для центру поля. «Обмежено»: вітер понад 5 м/с, опади або спека понад 25 °C.</p>`;
+}
+
+function agroAction(a, d){
+  if(a === "newScout"){ scoutDialog(null); return true; }
+  if(a === "newScoutTask"){ scoutTaskDialog(null); return true; }
+  if(a === "newNote"){ noteDialog(null); return true; }
+  if(a === "noteOnMap"){ startPick("scout", pt => noteDialog(null, { point: pt })); return true; }
+  if(a === "newThreat"){ simpleDialog("plantthreats", null, "загроза рослинам", threatFields); return true; }
+  if(a === "scoutField"){ scoutDialog(null, { fieldId: d.id }); return true; }
+  if(a === "weather"){ const f = byId("fields", d.id); const box = document.getElementById("wxBox"); if(!f || !box) return true; box.innerHTML = `<p class="note">Завантажую погоду…</p>`;
+    loadWeather(f).then(w => { box.innerHTML = weatherHtml(w, f); }).catch(() => { box.innerHTML = `<p class="note">Не вдалося отримати погоду. Спробуйте пізніше.</p>`; }); return true; }
+  if(a === "csvScout"){ exportCsv("Звіти оглядів", ["Дата","Поле","Культура","Фаза","Загрози","Макс. ураження, %","Густота","Висновки","Автор","Широта","Довгота"], S.scoutreports.filter(r => inPeriod(r.date)).map(r => [r.date, nameOf("fields", r.fieldId), r.crop, r.stage, (r.threats||[]).map(t => (nameOf("plantthreats", t.threatId)||"") + " " + (t.severity||"") + "%").join("; "), Math.max(0, ...(r.threats||[]).map(t => num(t.severity))), r.density, r.note, r.author, r.point ? r.point[1] : "", r.point ? r.point[0] : ""])); return true; }
+  return false;
+}
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2356,13 +2509,14 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
   main.innerHTML = (VIEWS[state.view] || viewDash)();
   document.querySelectorAll(".rail a").forEach(a => a.classList.toggle("on", a.dataset.v === state.view));
   attachMaps();
+  { const wx = document.getElementById("wxBox"); const f = wx && byId("fields", wx.dataset.fid); if(f && f.contours){ loadWeather(f).then(w => { const el = document.getElementById("wxBox"); if(el && el.dataset.fid === f.id) el.innerHTML = weatherHtml(w, f); }).catch(() => { const el = document.getElementById("wxBox"); if(el) el.innerHTML = `<p class="note">Погода тимчасово недоступна.</p>`; }); } }
   if(focusId){ const el = document.getElementById(focusId); if(el){ el.focus(); try { if(caret!=null) el.setSelectionRange(caret, caret); } catch(e){} } }
 }
 function setPeriod(k){
@@ -2375,7 +2529,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2396,6 +2550,7 @@ main.addEventListener("click", e => {
     if(landAction(a, d)) return;
     if(wmsAction(a, d)) return;
     if(techAction(a, d)) return;
+    if(agroAction(a, d)) return;
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -2411,6 +2566,11 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.scouttab){ state.scoutTab = d.scouttab; return render(); }
+  if(d.scout) return scoutDialog(byId("scoutreports", d.scout));
+  if(d.scouttask) return scoutTaskDialog(byId("scouttasks", d.scouttask));
+  if(d.note) return noteDialog(byId("notes", d.note));
+  if(d.threat) return simpleDialog("plantthreats", byId("plantthreats", d.threat), "загроза рослинам", threatFields);
   if(d.svctab){ state.svcTab = d.svctab; return render(); }
   if(d.fueltab){ state.fuelTab = d.fueltab; return render(); }
   if(d.harvtab){ state.harvTab = d.harvtab; return render(); }
@@ -2475,7 +2635,7 @@ document.addEventListener("click", e => { if(e.target.id === "menuBtn") document
 document.addEventListener("keydown", e => { if(e.key === "Escape" && document.getElementById("modalRoot").innerHTML) closeModal(); });
 
 /* attach the files block to dialogs of saved records */
-[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["harvDialog","harvests"],["waybillDialog","waybills"],["fuelingDialog","fuelings"],["opDialog","ops"]].forEach(([fn, col]) => {
+[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["harvDialog","harvests"],["scoutDialog","scoutreports"],["noteDialog","notes"],["waybillDialog","waybills"],["fuelingDialog","fuelings"],["opDialog","ops"]].forEach(([fn, col]) => {
   const orig = window[fn];
   window[fn] = function(rec, ...rest){ const r = orig.call(this, rec, ...rest); if(rec && rec.id) attachFiles(lastModal(), col, rec.id); return r; };
 });

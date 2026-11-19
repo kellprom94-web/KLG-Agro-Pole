@@ -1,6 +1,6 @@
 // КЛГ Агро Поле — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
-const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators"]);
+const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
@@ -86,6 +86,21 @@ async function handleApi(req, env, url) {
   if (fm && req.method === "DELETE") {
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
+  }
+  if (path === "/api/weather" && req.method === "GET") {
+    const lat = Number(url.searchParams.get("lat")), lon = Number(url.searchParams.get("lon"));
+    if (!(lat > 40 && lat < 55 && lon > 20 && lon < 45)) return json({ error: "bad coordinates" }, 400);
+    const from = url.searchParams.get("from") || "";
+    const q = "latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4) + "&timezone=Europe%2FKyiv";
+    const get = async (u) => { const r = await fetch(u, { cf: { cacheTtl: 1800, cacheEverything: true } }); return r.ok ? r.json() : null; };
+    const forecast = await get("https://api.open-meteo.com/v1/forecast?" + q + "&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code&past_days=31&forecast_days=8");
+    let history = null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      const end = new Date(Date.now() - 5 * 864e5).toISOString().slice(0, 10);
+      const start = from > end ? end : from;
+      if ((new Date(end) - new Date(start)) / 864e5 < 450) history = await get("https://archive-api.open-meteo.com/v1/archive?" + q + "&start_date=" + start + "&end_date=" + end + "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum");
+    }
+    return json({ forecast, history });
   }
   if (path === "/api/wms" && req.method === "GET") {
     const bbox = url.searchParams.get("bbox") || "";
