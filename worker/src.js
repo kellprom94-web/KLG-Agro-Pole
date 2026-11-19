@@ -1,6 +1,6 @@
 // КЛГ Агро Поле — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
-const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs"]);
+const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs", "aofields", "aowaybills", "aolzk", "aoitems"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
@@ -59,6 +59,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/tg/hook/") && req.method === "POST" && env.TELEGRAM_BOT_TOKEN && env.APP_PASSWORD && url.pathname === (await tgHookPath(env))) { try { return await handleTgHook(req, env); } catch (e) { return new Response("ok"); } }
+    if (url.pathname.startsWith("/mcp/") && env.DB && env.APP_PASSWORD) { if (url.pathname === (await aoMcpPath(env))) { await ensureSchema(env.DB); return handleMcp(req, env); } return new Response("not found", { status: 404 }); }
     if (!url.pathname.startsWith("/api/")) {
       return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "x-frame-options": "DENY", "referrer-policy": "same-origin" } });
     }
@@ -183,6 +184,10 @@ async function handleApi(req, env, url) {
     if (fr && !canWriteCol(user, fr.col)) return forbid();
     await env.DB.batch([env.DB.prepare("DELETE FROM file_chunks WHERE file_id = ?").bind(fm[1]), env.DB.prepare("DELETE FROM files WHERE id = ?").bind(fm[1])]);
     return json({ ok: true });
+  }
+  if (path === "/api/ao/info" && req.method === "GET") {
+    if (user.role !== "admin") return forbid();
+    return json(Object.assign({ url: url.origin + (await aoMcpPath(env)) }, await aoStatus(env)));
   }
   if (path === "/api/tg/info" && req.method === "GET") {
     if (!env.TELEGRAM_BOT_TOKEN) return json({ configured: false });
@@ -488,6 +493,67 @@ async function handleTgHook(req, env) {
   else if (/^\/digest/.test(text)) { const n = await sendDigests(env, chat); if (!n) await tgSend(env, chat, "Цей чат ще не підключено. Отримайте код у програмі: меню внизу → «Telegram»."); }
   else await tgSend(env, chat, "Щоб підключити сповіщення, відкрийте програму КЛГ Агро Поле → меню внизу → «Telegram» і натисніть посилання з кодом.\n\n/digest — зведення зараз\n/stop — відписатися");
   return new Response("ok");
+}
+
+/* ---------- АгроОблік: приймання даних через конектор (MCP) ---------- */
+const AO_COLS = { fields: "aofields", waybills: "aowaybills", lzk: "aolzk", items: "aoitems" };
+async function aoMcpPath(env) { return "/mcp/" + (await hmacHex(env.APP_PASSWORD, "agrooblik-mcp")).slice(0, 40); }
+async function aoStatus(env) {
+  await ensureSchema(env.DB); const out = {};
+  for (const [k, col] of Object.entries(AO_COLS)) {
+    const r = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(CAST(json_extract(data, '$.ts') AS REAL)) AS ts, MAX(updated) AS up FROM docs WHERE col = ? AND deleted = 0").bind(col).first();
+    out[k] = { count: (r && r.n) || 0, max_ts: (r && r.ts) || 0, last_received: (r && r.up) || null };
+  }
+  const s = await env.DB.prepare("SELECT data FROM docs WHERE col = 'settings' AND id = 'agrooblik'").first();
+  return { collections: out, last_sync: s ? JSON.parse(s.data).lastSync || null : null };
+}
+async function aoPush(env, a) {
+  const col = AO_COLS[a.collection]; if (!col) throw new Error("collection має бути одним із: " + Object.keys(AO_COLS).join(", "));
+  const recs = Array.isArray(a.records) ? a.records : []; if (recs.length > 1000) throw new Error("не більше 1000 записів за виклик");
+  const updated = new Date().toISOString(); const st = []; let bad = 0; const ids = new Set();
+  for (const r0 of recs) {
+    if (!r0 || typeof r0 !== "object") { bad++; continue; }
+    const r = r0.data && typeof r0.data === "object" && r0.id ? Object.assign({}, r0.data) : Object.assign({}, r0); const id = String(r0.id || r.id || ""); delete r.id;
+    if (!ID_RE.test(id)) { bad++; continue; } ids.add(id);
+    st.push(env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES (?, ?, ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = excluded.data, updated = excluded.updated, deleted = 0 WHERE docs.data <> excluded.data OR docs.deleted = 1").bind(col, id, JSON.stringify(r), updated));
+  }
+  for (let i = 0; i < st.length; i += 100) await env.DB.batch(st.slice(i, i + 100));
+  let removed = 0;
+  if (a.replace_all) {
+    const { results } = await env.DB.prepare("SELECT id FROM docs WHERE col = ? AND deleted = 0").bind(col).all();
+    const del = results.map((x) => x.id).filter((id) => !ids.has(id)); removed = del.length;
+    for (let i = 0; i < del.length; i += 100) await env.DB.batch(del.slice(i, i + 100).map((id) => env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, col, id)));
+  }
+  if (Array.isArray(a.deleted_ids) && a.deleted_ids.length) { const del = a.deleted_ids.map(String).filter((id) => ID_RE.test(id)); removed += del.length;
+    for (let i = 0; i < del.length; i += 100) await env.DB.batch(del.slice(i, i + 100).map((id) => env.DB.prepare("UPDATE docs SET data = '{}', deleted = 1, updated = ? WHERE col = ? AND id = ?").bind(updated, col, id))); }
+  await env.DB.prepare("INSERT INTO docs (col, id, data, updated, deleted) VALUES ('settings', 'agrooblik', ?, ?, 0) ON CONFLICT(col, id) DO UPDATE SET data = json_set(docs.data, '$.lastSync', ?), updated = excluded.updated, deleted = 0").bind(JSON.stringify({ lastSync: updated }), updated, updated).run();
+  return { collection: a.collection, received: recs.length, saved: st.length, skipped: bad, removed };
+}
+const AO_TOOLS = [
+  { name: "agrooblik_status", description: "Стан даних АгроОбліку в програмі КЛГ Поле: скільки записів кожної колекції вже отримано і найбільше значення поля ts (для інкрементальної синхронізації: надсилайте записи з ts більшим за max_ts).", inputSchema: { type: "object", properties: {} } },
+  { name: "agrooblik_push", description: "Записати в КЛГ Поле записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
+];
+async function handleMcp(req, env) {
+  if (req.method === "GET") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  if (req.method === "DELETE") return new Response(null, { status: 204 });
+  const msg = await req.json().catch(() => null); if (!msg) return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
+  const one = async (m) => {
+    if (m.id === undefined || m.id === null) return null;
+    const ok = (result) => ({ jsonrpc: "2.0", id: m.id, result }), err = (code, message) => ({ jsonrpc: "2.0", id: m.id, error: { code, message } });
+    if (m.method === "initialize") return ok({ protocolVersion: (m.params && m.params.protocolVersion) || "2025-06-18", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "klg-agro-pole", title: "КЛГ Агро Поле", version: "1.0.0" }, instructions: "Конектор програми КЛГ Агро Поле. Приймає дані з артефакту АгроОблік (шляхові листи, лімітно-забірні карти, поля, номенклатура), щоб вони автоматично з'являлися на полях." });
+    if (m.method === "ping") return ok({});
+    if (m.method === "tools/list") return ok({ tools: AO_TOOLS });
+    if (m.method === "tools/call") {
+      const name = m.params && m.params.name, a = (m.params && m.params.arguments) || {};
+      try {
+        let r; if (name === "agrooblik_status") r = await aoStatus(env); else if (name === "agrooblik_push") r = await aoPush(env, a); else return err(-32602, "Unknown tool: " + name);
+        return ok({ content: [{ type: "text", text: JSON.stringify(r) }], structuredContent: r });
+      } catch (e) { return ok({ content: [{ type: "text", text: "Помилка: " + (e.message || e) }], isError: true }); }
+    }
+    return err(-32601, "Method not found");
+  };
+  if (Array.isArray(msg)) { const out = (await Promise.all(msg.map(one))).filter(Boolean); return out.length ? json(out) : new Response(null, { status: 202 }); }
+  const r = await one(msg); return r ? json(r) : new Response(null, { status: 202 });
 }
 
 const HTML = __HTML__;

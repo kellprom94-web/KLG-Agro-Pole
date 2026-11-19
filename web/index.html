@@ -191,6 +191,7 @@ tr:last-child td{border-bottom:0}
     <a href="#users" data-v="users" id="usersLink" hidden>Користувачі</a>
     <a href="#backup" data-v="backup" id="backupLink" hidden>Резервні копії</a>
     <a href="#reports" data-v="reports">Звіти</a>
+    <a href="#agrooblik" data-v="agrooblik" id="aoLink" hidden>АгроОблік</a>
     <a href="#telegram" data-v="telegram">Telegram</a>
     <div class="season">
       <label for="seasonSel">Сезон</label>
@@ -224,7 +225,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs","aofields","aowaybills","aolzk","aoitems"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -2576,6 +2577,7 @@ async function loadMe(){
   const pw = document.getElementById("pwBtn"); if(pw) pw.onclick = passwordDialog;
   const ul = document.getElementById("usersLink"); if(ul) ul.hidden = !(ME && ME.role === "admin");
   const bl = document.getElementById("backupLink"); if(bl) bl.hidden = !(ME && ME.role === "admin");
+  const al = document.getElementById("aoLink"); if(al) al.hidden = !(ME && ME.role === "admin");
   render();
 }
 function roleBanner(){
@@ -2682,7 +2684,7 @@ async function showNdviImage(f, date){
 }
 
 /* ---------- field page (opens in a new tab, like Cropwise /fields/<id>/dashboards) ---------- */
-const FP_TABS = [["summary","Зведена інформація"],["ops","Агрооперації"],["machines","Роботи машин"],["yield","Показники врожаю"],["nutrition","План живлення"],["econ","Економіка"],["scout","Огляди"],["notes","Нотатки"],["rotation","Сівозміна"],["area","Площа і контури"],["land","Земельні ділянки"],["files","Файли"]];
+const FP_TABS = [["summary","Зведена інформація"],["ops","Агрооперації"],["machines","Роботи машин"],["yield","Показники врожаю"],["nutrition","План живлення"],["econ","Економіка"],["agrooblik","АгроОблік"],["scout","Огляди"],["notes","Нотатки"],["rotation","Сівозміна"],["area","Площа і контури"],["land","Земельні ділянки"],["files","Файли"]];
 function openFieldTab(fid){ const w = window.open(location.pathname + "#field-" + fid, "_blank"); if(!w) location.hash = "field-" + fid; }
 function ndviMap(){ return state.view === "fieldpage" ? MAPS.fieldpage : MAPS.fields; }
 function fieldNutritionRow(f, season){
@@ -2768,6 +2770,7 @@ function viewFieldPage(){
       : `<div class="card"><div class="empty">До поля ще не прив’язані земельні ділянки.</div></div>`;
   }
   if(T === "econ") body = econFieldHtml(f);
+  if(T === "agrooblik") body = aoFieldHtml(f);
   if(T === "files") body = `<div class="card" id="fpFiles"><div class="body"></div></div>`;
   return top + statusBanner() + tabs + body;
 }
@@ -2824,6 +2827,54 @@ async function backupAction(a, d){
   if(a === "restoreBackup"){ const b = (BACKUPS || []).find(x => x.id === d.id); try { const r = await fetch("/api/backups/" + d.id); const t = await readBackupFile(new File([await r.blob()], "b.gz")); restoreDialog(t, "копія від " + (b ? fdate(b.created.slice(0,10)) + " " + b.created.slice(11,16) : "")); } catch(e){ toast("Не вдалося прочитати копію"); } return true; }
   if(a === "delBackup"){ confirmBox("Видалити цю резервну копію?", async () => { await fetch("/api/backups/" + d.id, { method: "DELETE" }); BACKUPS = null; loadBackups(); }); return true; }
   return false;
+}
+
+/* ---------- АгроОблік: дані шляхових листів і списань на полях ---------- */
+const aoNorm = s => String(s || "").split(" · ")[0].toLowerCase().replace(/[’'`ʼ]/g, "'").replace(/\s+/g, " ").trim();
+function aoKeys(f){ const ks = new Set([aoNorm(f.name)]); String(f.aoNames || "").split(/[,;\n]/).map(aoNorm).filter(Boolean).forEach(k => ks.add(k)); return ks; }
+function aoFieldOf(id, name){ const af = S.aofields.find(x => x.id === id); return aoNorm(af ? af.name : name); }
+function aoMatch(f){ const ks = aoKeys(f); return { hit: (id, name) => ks.has(aoFieldOf(id, name)) }; }
+function aoFieldData(f){
+  const M = aoMatch(f), wb = [], lz = [];
+  S.aowaybills.forEach(w => { const fs = w.fields || []; const tot = fs.reduce((a, x) => a + num(x.area), 0);
+    fs.forEach(x => { if(!M.hit(x.fieldId, x.field)) return; const ha = num(x.area); wb.push({ w, x, ha, fuel: tot ? num(w.fuel) * ha / tot : (fs.length ? num(w.fuel) / fs.length : 0) }); }); });
+  S.aolzk.forEach(d => { if(!M.hit(d.fieldId, d.field)) return; (d.lines || []).forEach(l => lz.push({ d, l })); });
+  return { wb: wb.sort((a, b) => (b.w.date || "").localeCompare(a.w.date || "")), lz: lz.sort((a, b) => (b.d.date || "").localeCompare(a.d.date || "")) };
+}
+function aoItemName(l){ const it = S.aoitems.find(x => x.id === l.itemId); return l.itemName || (it && it.name) || l.itemId || ""; }
+function aoFieldHtml(f){
+  if(!S.aowaybills.length && !S.aolzk.length) return `<div class="card"><div class="empty"><b>Дані з АгроОбліку ще не надходили</b>Адміністратор налаштовує автоматичне надходження в розділі «АгроОблік» (меню внизу).</div></div>`;
+  const { wb, lz } = aoFieldData(f); const seasons = [...new Set([...wb.map(r => r.w.season), ...lz.map(r => r.d.season)].filter(Boolean))].sort().reverse();
+  const se = state.aoSeason && seasons.includes(state.aoSeason) ? state.aoSeason : (seasons[0] || ""); const W = wb.filter(r => !se || r.w.season === se), Z = lz.filter(r => !se || r.d.season === se);
+  const keys = [f.name, ...String(f.aoNames || "").split(/[,;\n]/).map(x => x.trim()).filter(Boolean)].join(", ");
+  if(!wb.length && !lz.length) return `<div class="card"><div class="empty"><b>Для цього поля записів в АгроОбліку не знайдено</b>Поле шукається за назвою: «${esc(keys)}». Якщо в АгроОбліку воно називається інакше, вкажіть ту назву в розділі «АгроОблік» → «Відповідність полів».</div></div>`;
+  const ops = {}; W.forEach(r => { const k = r.w.opName || "—"; const o = ops[k] ||= { ha: 0, fuel: 0, n: 0 }; o.ha += r.ha; o.fuel += r.fuel; o.n++; });
+  const mats = {}; Z.forEach(r => { const k = aoItemName(r.l) + "|" + (r.l.unit || ""); const m = mats[k] ||= { name: aoItemName(r.l), unit: r.l.unit || "", qty: 0 }; m.qty += num(r.l.qty); });
+  const fha = num(f.area);
+  return `<div class="filters"><label>Сезон АгроОбліку <select id="aoSeason">${seasons.map(x => opt(x, x, se)).join("")}</select></label><span class="note">Поле в АгроОбліку: ${esc(keys)} · дані оновлюються автоматично</span></div>
+  <div class="kpis"><div class="kpi"><b>${W.length}</b><span>записів у шляхових листах</span></div><div class="kpi"><b>${fmt(sum(W, r => r.ha))}</b><span>га оброблено</span></div><div class="kpi"><b>${fmt0(sum(W, r => r.fuel))}</b><span>л пального${fha ? " · " + fmt(sum(W, r => r.fuel) / fha) + " л/га поля" : ""}</span></div><div class="kpi"><b>${Z.length}</b><span>рядків списання матеріалів</span></div></div>
+  <div class="grid g2"><div class="card"><h2>Роботи за видами</h2><div class="tw"><table><thead><tr><th>Операція</th><th class="n">Записів</th><th class="n">Га</th><th class="n">Пальне, л</th><th class="n">л/га</th></tr></thead><tbody>${Object.entries(ops).sort((a, b) => b[1].ha - a[1].ha).map(([k, o]) => `<tr><td>${esc(k)}</td><td class="n">${o.n}</td><td class="n">${fmt(o.ha)}</td><td class="n">${fmt0(o.fuel)}</td><td class="n">${o.ha ? fmt(o.fuel / o.ha) : "—"}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Немає</td></tr>`}</tbody></table></div></div>
+  <div class="card"><h2>Списані матеріали</h2><div class="tw"><table><thead><tr><th>Матеріал</th><th class="n">Кількість</th><th class="n">На 1 га</th></tr></thead><tbody>${Object.values(mats).sort((a, b) => a.name.localeCompare(b.name)).map(m => `<tr><td>${esc(m.name)}</td><td class="n">${fmt(m.qty)} ${esc(m.unit)}</td><td class="n">${fha ? fmt(m.qty / fha) + " " + esc(m.unit) : "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Немає</td></tr>`}</tbody></table></div></div></div>
+  <div class="card" style="margin-top:16px"><h2>Шляхові листи (${W.length})</h2><div class="tw"><table><thead><tr><th>Дата</th><th>№</th><th>Операція</th><th>Трактор / агрегат</th><th>Водій</th><th class="n">Га</th><th class="n">Пальне, л</th></tr></thead><tbody>${W.map(r => `<tr><td>${fdate(r.w.date)}</td><td>${esc(r.w.number || "")}</td><td>${esc(r.w.opName || "")}${r.w.variant ? ` <span class="muted">${esc(r.w.variant)}</span>` : ""}</td><td>${esc(r.w.tractor || "")}${r.w.implement ? " + " + esc(r.w.implement) : ""}</td><td>${esc(r.w.driver || "")}${r.x.helper || r.w.helper ? `<div class="note">пом. ${esc(r.x.helper || r.w.helper)}</div>` : ""}</td><td class="n">${fmt(r.ha)}</td><td class="n">${fmt(r.fuel, 1)}${(r.w.fields || []).length > 1 ? `<div class="note">частка з ${fmt(num(r.w.fuel), 1)}</div>` : ""}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">Немає</td></tr>`}</tbody></table></div></div>
+  <div class="card" style="margin-top:16px"><h2>Лімітно-забірні карти (${Z.length})</h2><div class="tw"><table><thead><tr><th>Дата</th><th>№</th><th>Вид</th><th>Операція</th><th>Матеріал</th><th class="n">Кількість</th><th class="n">Площа, га</th></tr></thead><tbody>${Z.map(r => `<tr><td>${fdate(r.d.date)}</td><td>${esc(r.d.number || "")}</td><td>${esc(r.d.kind || "")}</td><td>${esc(r.l.opName || r.d.opName || "")}</td><td>${esc(aoItemName(r.l))}</td><td class="n">${fmt(num(r.l.qty))} ${esc(r.l.unit || "")}</td><td class="n">${r.l.area ? fmt(num(r.l.area)) : "—"}</td></tr>`).join("") || `<tr><td colspan="7" class="muted">Немає</td></tr>`}</tbody></table></div></div>`;
+}
+let AOI = null;
+async function loadAo(){ try { AOI = await api("/ao/info"); } catch(e){ AOI = { error: true }; } render(); }
+function viewAgrooblik(){
+  const H = header("АгроОблік → КЛГ Поле");
+  if(!ME || ME.role !== "admin") return H + `<div class="card"><div class="empty">Розділ доступний лише адміністратору.</div></div>`;
+  if(AOI == null){ loadAo(); return H + `<div class="card"><div class="empty">Завантаження…</div></div>`; }
+  const c = AOI.collections || {}; const ls = AOI.last_sync;
+  const matched = new Set(); S.fields.filter(f => !f.archived).forEach(f => { const ks = aoKeys(f); S.aofields.forEach(a => { if(ks.has(aoNorm(a.name))) matched.add(aoNorm(a.name)); }); });
+  const aoNames = [...new Map(S.aofields.map(a => [aoNorm(a.name), a])).values()].sort((a, b) => a.name.localeCompare(b.name, "uk"));
+  const unm = aoNames.filter(a => !matched.has(aoNorm(a.name)));
+  return H + `<div class="kpis"><div class="kpi"><b>${ls ? fdate(ls.slice(0,10)) + " " + ls.slice(11,16) : "—"}</b><span>останнє надходження (UTC)</span></div><div class="kpi"><b>${fmt0((c.waybills||{}).count||0)}</b><span>шляхових листів</span></div><div class="kpi"><b>${fmt0((c.lzk||{}).count||0)}</b><span>лімітно-забірних карт</span></div><div class="kpi"><b>${fmt0((c.fields||{}).count||0)}</b><span>полів АгроОбліку</span></div></div>
+  <div class="card"><h2>Як це працює</h2><p>АгроОблік лишається окремою програмою в Claude. Дані з нього (шляхові листи, лімітно-забірні карти, поля, номенклатура) регулярно переносить завдання Claude через конектор «КЛГ Агро Поле». На сторінці кожного поля вони видні на вкладці «АгроОблік». Тут дані лише для перегляду: змінюйте їх в АгроОбліку.</p>
+  <p><b>Адреса конектора</b> (Claude → Налаштування → Конектори → Додати власний конектор). Нікому її не пересилайте: хто знає адресу, може записувати дані АгроОбліку.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><code id="aoUrl" style="word-break:break-all;background:var(--soft,#f3f5f2);padding:6px 8px;border-radius:6px">${esc(AOI.url || "")}</code><button class="btn sm" type="button" data-act="aoCopy">Копіювати</button><button class="btn sm" type="button" data-act="aoReload">Оновити</button></div></div>
+  <div class="card" style="margin-top:16px"><h2>Відповідність полів</h2><p class="note">Поля зіставляються за назвою (частина після «·» не враховується). Якщо в АгроОбліку поле називається інакше, допишіть ту назву; кілька назв — через кому.</p>
+  <div class="tw"><table><thead><tr><th>Поле в КЛГ Поле</th><th class="n">Га</th><th>Інші назви в АгроОбліку</th><th class="n">Шляхових</th><th class="n">ЛЗК</th></tr></thead><tbody>${S.fields.filter(f => !f.archived).sort((a, b) => (a.name||"").localeCompare(b.name||"", "uk")).map(f => { const d = aoFieldData(f); return `<tr><td>${esc(f.name)}</td><td class="n">${fmt(num(f.area))}</td><td><input data-aonames="${esc(f.id)}" value="${esc(f.aoNames || "")}" placeholder="напр. 40 Вовочка" style="min-width:220px"></td><td class="n">${d.wb.length || "—"}</td><td class="n">${d.lz.length || "—"}</td></tr>`; }).join("")}</tbody></table></div>
+  ${unm.length ? `<h2 style="margin-top:16px">Поля АгроОбліку без пари (${unm.length})</h2><p class="note">${unm.map(a => esc(a.name) + (a.division ? ` <span class="muted">(${esc(a.division)})</span>` : "")).join(" · ")}</p>` : (aoNames.length ? `<p class="note">Усі поля АгроОбліку мають пару.</p>` : "")}</div>`;
 }
 
 /* ---------- Telegram notifications ---------- */
@@ -3029,7 +3080,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { telegram:viewTelegram, econ:viewEcon, backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { agrooblik:viewAgrooblik, telegram:viewTelegram, econ:viewEcon, backup:viewBackup, fieldpage:viewFieldPage, users:viewUsers, plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -3080,6 +3131,8 @@ main.addEventListener("click", e => {
     if(["newCost","savePrices","csvEcon"].includes(a)){ econAction(a, d); return; }
     if(["backupNow","exportAll","restore","restoreBackup","delBackup"].includes(a)){ backupAction(a, d); return; }
     if(a.startsWith("tg")){ tgAction(a, d); return; }
+    if(a === "aoReload"){ AOI = null; render(); return; }
+    if(a === "aoCopy"){ const t = (document.getElementById("aoUrl") || {}).textContent || ""; try { navigator.clipboard.writeText(t).then(() => toast("Адресу скопійовано")); } catch(e){ toast(t); } return; }
     if(a === "ndviClear"){ clearNdviLayer(); state.ndviShown = null; return render(); }
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
@@ -3155,6 +3208,8 @@ main.addEventListener("input", e => {
   if(id==="wq"){ state.wmsQ = e.target.value; render(); }
 });
 main.addEventListener("change", e => {
+  if(e.target.id === "aoSeason"){ state.aoSeason = e.target.value; render(); return; }
+  if(e.target.dataset && e.target.dataset.aonames){ const f = byId("fields", e.target.dataset.aonames); if(f){ save("fields", Object.assign({}, f, { aoNames: e.target.value.trim() })).then(() => toast("Збережено")); } return; }
   const id = e.target.id;
   if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
   if(id==="og"){ state.ops.group = e.target.value; render(); }
@@ -3181,7 +3236,7 @@ document.addEventListener("keydown", e => { if(e.key === "Escape" && document.ge
 const seasonSel = document.getElementById("seasonSel");
 function fillSeasons(){ const c = curSeason(); const ys = []; for(let y=c-5; y<=c+2; y++) ys.push(y); if(!ys.includes(state.season)) ys.push(state.season); seasonSel.innerHTML = ys.sort().map(y=>opt(y, "Сезон "+y, state.season)).join(""); }
 seasonSel.onchange = () => { state.season = Number(seasonSel.value); lsSet("season", state.season); render(); };
-function route(){ const h = (location.hash||"").replace("#",""); const fm = h.match(/^field-([A-Za-z0-9._-]+?)(?:-(summary|econ|ops|machines|yield|nutrition|scout|notes|rotation|area|land|files))?$/); if(fm){ if(state.fpId !== fm[1]){ clearNdviLayer(); state.ndviShown = null; state.ndviAuto = null; if(MAPS.fieldpage) MAPS.fieldpage.fitted = false; } state.view = "fieldpage"; state.fpId = fm[1]; state.fieldSel = fm[1]; state.fpTab = fm[2] || state.fpTab || "summary"; } else state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
+function route(){ const h = (location.hash||"").replace("#",""); const fm = h.match(/^field-([A-Za-z0-9._-]+?)(?:-(summary|econ|agrooblik|ops|machines|yield|nutrition|scout|notes|rotation|area|land|files))?$/); if(fm){ if(state.fpId !== fm[1]){ clearNdviLayer(); state.ndviShown = null; state.ndviAuto = null; if(MAPS.fieldpage) MAPS.fieldpage.fitted = false; } state.view = "fieldpage"; state.fpId = fm[1]; state.fieldSel = fm[1]; state.fpTab = fm[2] || state.fpTab || "summary"; } else state.view = VIEWS[h] ? h : "dash"; if(state.view !== "machines") state.machineId = null; document.getElementById("rail").classList.remove("open"); render(); window.scrollTo(0,0); }
 window.addEventListener("hashchange", route);
 fillSeasons(); route();
 document.getElementById("logoutBtn").onclick = async () => { try { await fetch("/api/logout", { method: "POST" }); } catch(e){} authed = false; ME = null; USERS = null; COLS.forEach(c => S[c] = []); const mb = document.getElementById("meBox"); if(mb) mb.innerHTML = ""; render(); showLogin(); };
