@@ -59,8 +59,13 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/tg/hook/") && req.method === "POST" && env.TELEGRAM_BOT_TOKEN && env.APP_PASSWORD && url.pathname === (await tgHookPath(env))) { try { return await handleTgHook(req, env); } catch (e) { return new Response("ok"); } }
-    if (url.pathname.startsWith("/.well-known/") || url.pathname === "/register" || url.pathname === "/authorize" || url.pathname === "/token") return new Response(JSON.stringify({ error: "not_found" }), { status: 404, headers: { "content-type": "application/json" } });
-    if (url.pathname.startsWith("/mcp/") && env.DB && env.APP_PASSWORD) { if (url.pathname === (await aoMcpPath(env))) { await ensureSchema(env.DB); return handleMcp(req, env); } return new Response("not found", { status: 404 }); }
+    if (env.DB && env.APP_PASSWORD && (url.pathname.startsWith("/.well-known/") || url.pathname.startsWith("/oauth/"))) return handleOAuth(req, env, url);
+    if (url.pathname === "/mcp" && env.DB && env.APP_PASSWORD) {
+      if (req.method === "OPTIONS") return oaJson({}, 204);
+      await ensureSchema(env.DB);
+      if (!(await mcpBearerOk(req, env))) return oaJson({ error: "unauthorized" }, 401, { "www-authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource"` });
+      return handleMcp(req, env);
+    }
     if (!url.pathname.startsWith("/api/")) {
       return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "x-frame-options": "DENY", "referrer-policy": "same-origin" } });
     }
@@ -188,7 +193,7 @@ async function handleApi(req, env, url) {
   }
   if (path === "/api/ao/info" && req.method === "GET") {
     if (user.role !== "admin") return forbid();
-    return json(Object.assign({ url: url.origin + (await aoMcpPath(env)) }, await aoStatus(env)));
+    return json(Object.assign({ url: url.origin + "/mcp" }, await aoStatus(env)));
   }
   if (path === "/api/tg/info" && req.method === "GET") {
     if (!env.TELEGRAM_BOT_TOKEN) return json({ configured: false });
@@ -555,6 +560,92 @@ async function handleMcp(req, env) {
   };
   if (Array.isArray(msg)) { const out = (await Promise.all(msg.map(one))).filter(Boolean); return out.length ? json(out) : new Response(null, { status: 202 }); }
   const r = await one(msg); return r ? json(r) : new Response(null, { status: 202 });
+}
+
+/* ---------- OAuth 2.1 для конектора Claude (вхід адміністратора) ---------- */
+const sha256hex = async (s) => hex(await crypto.subtle.digest("SHA-256", enc.encode(s)));
+const randTok = (n = 32) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+async function oauthSchema(db) {
+  await db.prepare("CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, redirect_uris TEXT, name TEXT, created TEXT)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS oauth_codes (code TEXT PRIMARY KEY, client_id TEXT, redirect_uri TEXT, challenge TEXT, user_id TEXT, exp INTEGER)").run();
+  await db.prepare("CREATE TABLE IF NOT EXISTS oauth_tokens (hash TEXT PRIMARY KEY, kind TEXT, client_id TEXT, user_id TEXT, exp INTEGER)").run();
+}
+async function checkLogin(env, login, pw) {
+  login = String(login || "admin").trim().toLowerCase(); pw = String(pw || "");
+  if (!pw) return null;
+  if (login === "admin" && (await safeEqual(pw, env.APP_PASSWORD))) return ADMIN;
+  const u = await env.DB.prepare("SELECT id, login, name, role, hash, salt, active FROM users WHERE login = ?").bind(login).first();
+  if (!u || !u.active) return null;
+  const h = await hashPassword(pw, u.salt);
+  return (await safeEqual(h.hash, u.hash)) ? { id: u.id, login: u.login, name: u.name, role: u.role } : null;
+}
+const oaJson = (o, status = 200, extra = {}) => new Response(status === 204 ? null : JSON.stringify(o), { status, headers: Object.assign({ "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type, mcp-protocol-version" }, extra) });
+function oaPage(title, body) {
+  return new Response(`<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{font:15px system-ui,sans-serif;background:#f3f5f0;color:#1d2419;display:grid;place-items:center;min-height:100vh;margin:0}form,.c{background:#fff;border:1px solid #d3dacb;border-radius:12px;padding:24px;width:min(380px,92vw);display:grid;gap:12px}h1{font-size:19px;margin:0}input{font:inherit;padding:9px 10px;border:1px solid #c9d1c1;border-radius:8px}button{font:inherit;padding:10px;border:0;border-radius:8px;background:#2f6b3a;color:#fff;cursor:pointer}.e{color:#b3402e}.n{color:#5d6857;font-size:13px}</style></head><body>${body}</body></html>`, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY" } });
+}
+async function handleOAuth(req, env, url) {
+  const o = url.origin, p = url.pathname;
+  if (req.method === "OPTIONS") return oaJson({}, 204);
+  if (p.startsWith("/.well-known/oauth-protected-resource")) return oaJson({ resource: o + "/mcp", authorization_servers: [o], bearer_methods_supported: ["header"], resource_name: "КЛГ Агро Поле" });
+  if (p.startsWith("/.well-known/oauth-authorization-server") || p.startsWith("/.well-known/openid-configuration"))
+    return oaJson({ issuer: o, authorization_endpoint: o + "/oauth/authorize", token_endpoint: o + "/oauth/token", registration_endpoint: o + "/oauth/register", response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], scopes_supported: ["agrooblik"] });
+  if (p.startsWith("/.well-known/")) return oaJson({ error: "not_found" }, 404);
+  await ensureSchema(env.DB); await oauthSchema(env.DB);
+  if (p === "/oauth/register" && req.method === "POST") {
+    const b = await req.json().catch(() => ({})); const uris = Array.isArray(b.redirect_uris) ? b.redirect_uris.map(String).filter((u) => /^https:\/\//.test(u) || /^http:\/\/(localhost|127\.0\.0\.1)/.test(u)) : [];
+    if (!uris.length) return oaJson({ error: "invalid_redirect_uri" }, 400);
+    const id = "c_" + randTok(16);
+    await env.DB.prepare("INSERT INTO oauth_clients (id, redirect_uris, name, created) VALUES (?, ?, ?, ?)").bind(id, JSON.stringify(uris), String(b.client_name || "").slice(0, 100), new Date().toISOString()).run();
+    return oaJson({ client_id: id, client_id_issued_at: Math.floor(Date.now() / 1000), redirect_uris: uris, client_name: b.client_name || "", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" }, 201);
+  }
+  if (p === "/oauth/authorize") {
+    const q = req.method === "POST" ? new URLSearchParams(await req.text()) : url.searchParams;
+    const cid = q.get("client_id") || "", ru = q.get("redirect_uri") || "", ch = q.get("code_challenge") || "", st = q.get("state") || "";
+    const c = await env.DB.prepare("SELECT redirect_uris, name FROM oauth_clients WHERE id = ?").bind(cid).first();
+    if (!c || !JSON.parse(c.redirect_uris).includes(ru)) return oaPage("Помилка", `<div class="c"><h1>Невідомий застосунок</h1><p class="n">Спробуйте додати конектор у Claude ще раз.</p></div>`);
+    if ((q.get("response_type") || "code") !== "code" || !ch || (q.get("code_challenge_method") || "S256") !== "S256") return oaPage("Помилка", `<div class="c"><h1>Непідтримуваний запит</h1></div>`);
+    const hidden = ["client_id", "redirect_uri", "code_challenge", "code_challenge_method", "state", "scope", "response_type", "resource"].map((k) => q.get(k) != null ? `<input type="hidden" name="${k}" value="${String(q.get(k)).replace(/[&<>"]/g, (x) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[x]))}">` : "").join("");
+    let err = "";
+    if (req.method === "POST") {
+      const u = await checkLogin(env, q.get("login"), q.get("password"));
+      if (!u) { await new Promise((r) => setTimeout(r, 700)); err = "Неправильний логін або пароль."; }
+      else if (u.role !== "admin") err = "Підключати конектор може лише адміністратор.";
+      else {
+        const code = randTok(24);
+        await env.DB.prepare("INSERT INTO oauth_codes (code, client_id, redirect_uri, challenge, user_id, exp) VALUES (?, ?, ?, ?, ?, ?)").bind(code, cid, ru, ch, u.id, Date.now() + 10 * 60e3).run();
+        const back = new URL(ru); back.searchParams.set("code", code); if (st) back.searchParams.set("state", st);
+        return new Response(null, { status: 302, headers: { location: back.toString(), "cache-control": "no-store" } });
+      }
+    }
+    return oaPage("Підключення Claude", `<form method="post" action="/oauth/authorize">${hidden}<h1>КЛГ Агро Поле</h1><p class="n">Claude просить дозвіл записувати в програму дані з АгроОбліку (шляхові листи, лімітно-забірні карти, поля, номенклатуру). Увійдіть як адміністратор, щоб дозволити.</p>${err ? `<div class="e">${err}</div>` : ""}<input name="login" placeholder="Логін" value="admin" autocomplete="username"><input name="password" type="password" placeholder="Пароль" autocomplete="current-password" autofocus><button type="submit">Дозволити</button></form>`);
+  }
+  if (p === "/oauth/token" && req.method === "POST") {
+    const ct = req.headers.get("content-type") || ""; const q = ct.includes("json") ? new URLSearchParams(Object.entries(await req.json().catch(() => ({})))) : new URLSearchParams(await req.text());
+    const gt = q.get("grant_type"); let uid, cid;
+    if (gt === "authorization_code") {
+      const c = await env.DB.prepare("SELECT * FROM oauth_codes WHERE code = ?").bind(q.get("code") || "").first();
+      await env.DB.prepare("DELETE FROM oauth_codes WHERE code = ?").bind(q.get("code") || "").run();
+      if (!c || c.exp < Date.now() || c.client_id !== q.get("client_id") || c.redirect_uri !== q.get("redirect_uri")) return oaJson({ error: "invalid_grant" }, 400);
+      const v = q.get("code_verifier") || ""; if (!v || b64url(await crypto.subtle.digest("SHA-256", enc.encode(v))) !== c.challenge) return oaJson({ error: "invalid_grant", error_description: "PKCE" }, 400);
+      uid = c.user_id; cid = c.client_id;
+    } else if (gt === "refresh_token") {
+      const h = await sha256hex(q.get("refresh_token") || ""); const t = await env.DB.prepare("SELECT * FROM oauth_tokens WHERE hash = ? AND kind = 'refresh'").bind(h).first();
+      if (!t || t.exp < Date.now()) return oaJson({ error: "invalid_grant" }, 400);
+      await env.DB.prepare("DELETE FROM oauth_tokens WHERE hash = ?").bind(h).run(); uid = t.user_id; cid = t.client_id;
+    } else return oaJson({ error: "unsupported_grant_type" }, 400);
+    const at = randTok(32), rt = randTok(32), life = 30 * 864e2;
+    await env.DB.batch([env.DB.prepare("INSERT INTO oauth_tokens (hash, kind, client_id, user_id, exp) VALUES (?, 'access', ?, ?, ?)").bind(await sha256hex(at), cid, uid, Date.now() + life * 1000),
+      env.DB.prepare("INSERT INTO oauth_tokens (hash, kind, client_id, user_id, exp) VALUES (?, 'refresh', ?, ?, ?)").bind(await sha256hex(rt), cid, uid, Date.now() + 365 * 864e5),
+      env.DB.prepare("DELETE FROM oauth_tokens WHERE exp < ?").bind(Date.now())]);
+    return oaJson({ access_token: at, token_type: "Bearer", expires_in: life, refresh_token: rt, scope: "agrooblik" });
+  }
+  return oaJson({ error: "not_found" }, 404);
+}
+async function mcpBearerOk(req, env) {
+  const m = (req.headers.get("authorization") || "").match(/^Bearer\s+(\S+)$/i); if (!m) return false;
+  await oauthSchema(env.DB); const t = await env.DB.prepare("SELECT exp FROM oauth_tokens WHERE hash = ? AND kind = 'access'").bind(await sha256hex(m[1])).first();
+  return !!(t && t.exp > Date.now());
 }
 
 const HTML = __HTML__;
