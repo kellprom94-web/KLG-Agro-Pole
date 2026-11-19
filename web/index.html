@@ -381,7 +381,7 @@ function exportCsv(name, head, rows){
 const MT_KEY = "__MAPTILER_KEY__";
 const STYLES = { sat: "https://api.maptiler.com/maps/hybrid/style.json?key=" + MT_KEY, map: "https://api.maptiler.com/maps/streets-v2/style.json?key=" + MT_KEY };
 let mapStyle = lsGet("mapStyle") || "sat";
-let showKadastr = lsGet("kadastr") === "1";
+let showKadastr = false; /* map.land.gov.ua WMS does not respond at the moment; button hidden until it does */
 function toggleKadastr(){ showKadastr = !showKadastr; lsSet("kadastr", showKadastr ? "1" : "0"); Object.values(MAPS).forEach(M => { if(M.map.getLayer && M.map.getLayer("kadastr")) M.map.setLayoutProperty("kadastr", "visibility", showKadastr ? "visible" : "none"); M.el.querySelector("[data-kad]").classList.toggle("on", showKadastr); }); if(showKadastr) toast("Кадастровий шар видно з наближення 12 і більше"); }
 const MAPS = {}, pendingMaps = {};
 const EMPTY_FC = { type: "FeatureCollection", features: [] };
@@ -455,7 +455,7 @@ function updateDraw(M){
 function createMap(key){
   const el = document.createElement("div"); el.className = "mapbox";
   el.innerHTML = `<div class="mapgl"></div>
-    <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button><button type="button" data-kad title="Публічна кадастрова карта України">Кадастр</button></div>
+    <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button><button type="button" data-kad title="Публічна кадастрова карта України" hidden>Кадастр</button></div>
     <div class="mapnote">Контурів полів ще немає. Намалюйте поле на карті або імпортуйте KML/GeoJSON у розділі «Поля і карта».</div>
     <div class="drawbar" hidden><span></span><button type="button" data-dundo>Крок назад</button><button type="button" data-dcancel>Скасувати</button><button type="button" class="pri" data-ddone>Завершити</button></div>`;
   const M = { el, key, fields: [], parcels: [], fitted: false, draw: null, parcelsFirst: key === "land" };
