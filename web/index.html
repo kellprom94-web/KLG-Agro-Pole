@@ -175,6 +175,7 @@ tr:last-child td{border-bottom:0}
     <a href="#fields" data-v="fields">Поля і карта</a>
     <a href="#rotation" data-v="rotation">Сівозміна</a>
     <a href="#ops" data-v="ops">Агрооперації</a>
+    <a href="#plans" data-v="plans">Планування</a>
     <a href="#scout" data-v="scout">Огляди полів</a>
     <div class="sec">Техніка</div>
     <a href="#machines" data-v="machines">Машини</a>
@@ -218,7 +219,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -237,7 +238,7 @@ const state = {
   machineId: null, machQ: "",
   refTab: "products", repTab: "machines",
   landTab: "overview", landQ: "", landCouncil: "", landStatus: "", rentYear: new Date().getFullYear(), parcelSel: null,
-  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips", scoutTab: "reports",
+  wmsTab: "stock", wmsQ: "", whSel: "", stockDate: "", itemCat: "", itemArch: false, wmsRep: "turnover", svcTab: "book", fuelTab: "fuelings", fuelSt: "", harvTab: "trips", scoutTab: "reports", planTab: "agro",
   mapVB: {}
 };
 
@@ -1067,7 +1068,7 @@ function simpleDialog(col, x, title, fields){
   });
 }
 const PRODUCT_SUBTYPES = ["Гербіцид","Фунгіцид","Інсектицид","Акарицид","Десикант","Протруйник","Ад’ювант","Регулятор росту","Біологічні добавки","Мікродобрива","Мінеральні добрива","Органічні добрива","Насіння","Дизельне паливо","Бензин","Мастила","Запчастина","Інше"];
-const productFields = [["name","Назва"],["type","Категорія","select",PRODUCT_TYPES],["subtype","Тип / клас","select",PRODUCT_SUBTYPES],["formulation","Препаративна форма"],["crop","Культура (для насіння)"],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
+const productFields = [["name","Назва"],["type","Категорія","select",PRODUCT_TYPES],["subtype","Тип / клас","select",PRODUCT_SUBTYPES],["formulation","Препаративна форма"],["crop","Культура (для насіння)"],["n","N, % (для добрив)","num"],["p","P₂O₅, %","num"],["k","K₂O, %","num"],["density","Густина, кг/л (для рідких)","num"],["unit","Одиниця виміру","select",UNITS],["ai","Діюча речовина / склад"],["price","Ціна за одиницю, грн","num"],["externalId","Зовнішній ідентифікатор"],["note","Додаткова інформація","area"]];
 const implFields = [["name","Назва"],["type","Тип"],["width","Ширина захвату, м","num"],["inv","Інвентарний номер"],["note","Примітка","area"]];
 const personFields = [["name","ПІБ"],["role","Посада","select",PEOPLE_ROLES],["phone","Телефон"],["note","Примітка","area"]];
 
@@ -2445,6 +2446,116 @@ function agroAction(a, d){
   return false;
 }
 
+/* ---------- planning: agro plans, nutrition plans, recommendations ---------- */
+const DEFAULT_REMOVAL = { "Пшениця озима": [30, 12, 25], "Пшениця яра": [35, 12, 25], "Ячмінь ярий": [25, 11, 22], "Ячмінь озимий": [25, 11, 22], "Кукурудза": [25, 11, 25], "Соняшник": [45, 20, 100], "Ріпак озимий": [50, 25, 45], "Соя": [70, 20, 35], "Горох": [60, 16, 30], "Жито озиме": [28, 12, 26] };
+function removalFor(crop){ const s = (S.settings.find(x => x.id === "nutrition") || {}).removal || {}; return s[crop] || DEFAULT_REMOVAL[crop] || null; }
+const REC_STATUS = { new: ["Нова","st-planned"], accepted: ["Прийнята","st-progress"], done: ["Виконана","st-done"], rejected: ["Відхилена","st-cancel"] };
+const unitPrice = pid => latestPrice(pid) || num((byId("products", pid) || {}).price);
+function planFields(p){ return (p.fieldIds || []).map(id => byId("fields", id)).filter(Boolean); }
+function planArea(p){ return sum(planFields(p), f => f.area); }
+function planCostPerHa(p){ return sum(p.items || [], it => sum(it.applications || [], a => num(a.rate) * unitPrice(a.productId)) + num(it.serviceCost)); }
+function planOps(p){ return S.ops.filter(o => o.planId === p.id); }
+
+function viewPlans(){
+  const T = state.planTab || "agro";
+  const tabs = [["agro","Агроплани"],["nutrition","Плани живлення"],["recs","Агрорекомендації"]];
+  let body = "";
+  if(T === "agro"){
+    const list = S.agroplans.filter(p => Number(p.season) === state.season).sort((a,b) => (a.name||"").localeCompare(b.name||"","uk"));
+    body = `<div class="filters"><span class="muted">Сезон ${state.season}</span><span style="flex:1"></span><button class="btn pri" type="button" data-act="newAgroplan">+ Агроплан</button></div>
+    ${list.length ? `<div class="tw"><table><thead><tr><th>Агроплан</th><th>Культура</th><th class="n">Полів</th><th class="n">Площа, га</th><th class="n">Операцій у плані</th><th class="n">Створено агрооперацій</th><th>Прогрес</th><th class="n">Матеріали, грн/га</th><th class="n">Бюджет, грн</th><th class="n">Факт матеріалів, грн</th></tr></thead><tbody>
+    ${list.map(p => { const ops = planOps(p); const plan = sum(ops, opPlanned), done = sum(ops, opDone); const pct = plan ? Math.min(100, done / plan * 100) : 0; const area = planArea(p);
+      const fact = sum(ops.filter(o => o.status === "done" || opDone(o)), o => sum(o.applications || [], a => num(a.rate) * opDone(o) * unitPrice(a.productId)));
+      return `<tr class="click" data-agroplan="${esc(p.id)}"><td><b>${esc(p.name)}</b><div class="note">${esc(p.note||"")}</div></td><td>${cropTag(p.crop)}</td><td class="n">${planFields(p).length}</td><td class="n">${fmt(area)}</td><td class="n">${(p.items||[]).length}</td><td class="n">${ops.length}</td><td><div class="bar" title="${fmt0(pct)}%"><i style="width:${pct}%"></i></div><div class="note">${fmt0(pct)}% · ${fmt(done)} з ${fmt(plan)} га</div></td><td class="n">${fmt(planCostPerHa(p))}</td><td class="n">${fmt0(planCostPerHa(p) * area)}</td><td class="n">${fact?fmt0(fact):"—"}</td></tr>`; }).join("")}</tbody></table></div>`
+      : `<div class="card"><div class="empty"><b>Агропланів на сезон ${state.season} немає</b>Агроплан — це технологічна карта: перелік робіт і матеріалів для культури на групу полів. З нього одним кліком створюються агрооперації на кожне поле.</div></div>`}`;
+  }
+  if(T === "nutrition"){
+    const fields = S.fields.filter(f => !f.archived && fieldCrop(f)).sort((a,b) => (a.group||"").localeCompare(b.group||"","uk") || a.name.localeCompare(b.name,"uk",{numeric:true}));
+    const rows = fields.map(f => { const s = fieldSeason(f); const rem = removalFor(s.crop); const yt = num(s.plannedYield) / 10; const need = rem && yt ? rem.map(r => r * yt) : null;
+      const applied = [0,0,0]; S.ops.filter(o => o.fieldId === f.id && Number(o.season) === state.season).forEach(o => { const area = opDone(o); if(!area) return; (o.applications || []).forEach(a => { const p = byId("products", a.productId); if(!p) return; let kg = num(a.rate); if(a.unit === "т") kg *= 1000; if(a.unit === "л") kg *= num(p.density) || 1; [num(p.n), num(p.p), num(p.k)].forEach((pct, i) => applied[i] += kg * pct / 100); }); });
+      return { f, s, need, applied }; });
+    body = `<p class="note">Потреба = планова урожайність × винос елементів на 1 т продукції. Внесене рахується з виконаних агрооперацій сезону ${state.season} за складом добрив (N, P₂O₅, K₂O у картці матеріалу). Коефіцієнти виносу орієнтовні — змініть їх під свої ґрунти.</p>
+    <div class="filters"><span style="flex:1"></span><button class="btn" type="button" data-act="removalSettings">Коефіцієнти виносу</button><button class="btn sm" type="button" data-act="csvNutrition">Експорт</button></div>
+    ${rows.length ? `<div class="tw"><table><thead><tr><th>Поле</th><th>Культура</th><th class="n">План, ц/га</th><th class="n">Потреба N / P / K, кг/га</th><th class="n">Внесено N / P / K, кг/га</th><th class="n">Баланс N</th><th class="n">Баланс P₂O₅</th><th class="n">Баланс K₂O</th></tr></thead><tbody>
+    ${rows.map(r => { const bal = r.need ? r.need.map((n, i) => r.applied[i] - n) : null; const c = v => v == null ? "" : v < -10 ? "color:var(--bad)" : v < 0 ? "color:var(--warn)" : "color:var(--good)";
+      return `<tr class="click" data-field-open="${esc(r.f.id)}"><td><b>${esc(r.f.name)}</b><div class="note">${esc(r.f.group||"")}</div></td><td>${cropTag(r.s.crop)}</td><td class="n">${r.s.plannedYield?fmt(num(r.s.plannedYield),1):"—"}</td><td class="n">${r.need ? r.need.map(v => fmt0(v)).join(" / ") : `<span class="muted">${removalFor(r.s.crop) ? "вкажіть план" : "немає коефіцієнтів"}</span>`}</td><td class="n">${r.applied.map(v => fmt0(v)).join(" / ")}</td>${[0,1,2].map(i => `<td class="n" style="${c(bal && bal[i])}">${bal ? (bal[i] > 0 ? "+" : "") + fmt0(bal[i]) : "—"}</td>`).join("")}</tr>`; }).join("")}</tbody></table></div>`
+      : `<div class="card"><div class="empty">Вкажіть культури полів на сезон ${state.season}.</div></div>`}`;
+    state._nutrition = rows;
+  }
+  if(T === "recs"){
+    const list = [...S.recommendations].sort((a,b) => (a.status === "done") - (b.status === "done") || (b.date||"").localeCompare(a.date||""));
+    body = `<div class="filters"><span style="flex:1"></span><button class="btn pri" type="button" data-act="newRec">+ Рекомендація</button></div><div class="tw"><table><thead><tr><th>Статус</th><th>Дата</th><th>Поля</th><th>Рекомендована робота</th><th>Матеріали</th><th>Термін</th><th>Автор</th></tr></thead><tbody>
+    ${list.length ? list.map(r => { const [s, c] = REC_STATUS[r.status || "new"]; return `<tr class="click" data-rec="${esc(r.id)}"><td><span class="pill ${c}">${s}</span></td><td>${fdate(r.date)}</td><td>${(r.fieldIds||[]).map(id => esc(nameOf("fields", id))).join(", ")||"—"}</td><td><b>${esc(r.workType||"")}</b><div class="note">${esc((r.text||"").slice(0,100))}</div></td><td>${(r.applications||[]).map(a => esc(prodName(a.productId)) + " " + fmt(num(a.rate)) + " " + esc(a.unit||"") + "/га").join("<br>")||"—"}</td><td>${fdate(r.dueDate)}</td><td>${esc(r.author||"")}</td></tr>`; }).join("") : `<tr><td colspan="7"><div class="empty">Рекомендацій немає.</div></td></tr>`}</tbody></table></div>`;
+  }
+  return header("Планування", "") + statusBanner() + `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-plantab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
+}
+function planItemHtml(it){
+  it = it || { applications: [] };
+  return `<div class="pitem card" style="padding:10px;display:grid;gap:8px"><div class="f" style="grid-template-columns:2fr 1fr 1fr 1fr 32px;align-items:end">
+    <label>Вид робіт<select class="iW">${workTypeOptions(it.workType || "Дискування")}</select></label><label>З<input class="iF" type="date" value="${esc(it.plannedFrom||"")}"></label><label>До<input class="iT" type="date" value="${esc(it.plannedTo||"")}"></label><label>Послуги, грн/га<input class="iS" inputmode="decimal" value="${esc(it.serviceCost??"")}"></label><button class="btn sm iX" type="button" aria-label="Прибрати операцію">×</button></div>
+    <div class="apps iA">${(it.applications||[]).map(appRowHtml).join("")}</div><div><button class="btn sm iAdd" type="button">+ Матеріал</button></div></div>`;
+}
+function agroplanDialog(p){
+  const isNew = !p; p = p || { season: state.season, items: [], fieldIds: [] };
+  const fields = [...S.fields].filter(f => !f.archived).sort((a,b)=>(a.group||"").localeCompare(b.group||"","uk")||a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Новий агроплан" : p.name, wide: true,
+    body: `<div class="f"><label>Назва<input id="apN" value="${esc(p.name||"")}" placeholder="напр. Кукурудза — інтенсивна технологія"></label><label>Сезон<input id="apS" type="number" value="${esc(p.season)}"></label><label>Культура<input id="apC" list="cropList" value="${esc(p.crop||"")}"></label><label>Відповідальний<input id="apR" value="${esc(p.responsible||"")}"></label>
+      <label class="full">Поля <button class="btn sm" type="button" id="apByCrop">Вибрати всі поля з цією культурою</button><div class="checks">${fields.map(f => `<label><input type="checkbox" name="apF" value="${esc(f.id)}" data-crop="${esc(fieldCrop(f, Number(p.season)))}" ${(p.fieldIds||[]).includes(f.id)?"checked":""}>${esc(f.name)} <span class="muted">${esc(fieldCrop(f, Number(p.season))||"")} · ${fmt(num(f.area))} га</span></label>`).join("")}</div></label>
+      <label class="full">Примітка<input id="apNo" value="${esc(p.note||"")}"></label></div>${cropDatalist()}
+    <div><b>Технологічні операції</b><div id="apItems" style="display:grid;gap:8px;margin-top:6px">${(p.items||[]).map(planItemHtml).join("")}</div><button class="btn sm" type="button" id="apAdd" style="margin-top:6px">+ Операція</button></div><div class="note" id="apTot"></div>`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="apMake">Створити агрооперації на поля</button>`,
+    onDelete: isNew ? null : async () => remove("agroplans", p.id),
+    onSave: async (m) => { const name = val(m,"apN"); if(!name){ m.querySelector("#apN").focus(); return false; } return !!(await save("agroplans", readPlan(m, p))); }
+  });
+  const box = m.querySelector("#apItems");
+  const readPlan = (m, p) => Object.assign({}, p, { name: val(m,"apN"), season: Number(val(m,"apS")) || state.season, crop: val(m,"apC"), responsible: val(m,"apR"), note: val(m,"apNo"), fieldIds: checked(m,"apF"),
+    items: [...box.querySelectorAll(".pitem")].map(x => ({ workType: x.querySelector(".iW").value, plannedFrom: x.querySelector(".iF").value, plannedTo: x.querySelector(".iT").value, serviceCost: num(x.querySelector(".iS").value) || "", applications: [...x.querySelectorAll(".approw")].map(r => ({ productId: r.querySelector(".aP").value, rate: num(r.querySelector(".aR").value), unit: r.querySelector(".aU").value })).filter(a => a.productId) })) });
+  const tot = () => { const tmp = readPlan(m, p); const area = planArea(tmp); m.querySelector("#apTot").textContent = `Полів ${planFields(tmp).length}, ${fmt(area)} га · матеріали і послуги ${fmt(planCostPerHa(tmp))} грн/га · бюджет ${fmt0(planCostPerHa(tmp) * area)} грн`; };
+  m.addEventListener("change", tot); m.addEventListener("input", tot); tot();
+  m.querySelector("#apAdd").onclick = () => { box.insertAdjacentHTML("beforeend", planItemHtml()); };
+  box.addEventListener("click", e => { if(e.target.classList.contains("iX")) { e.target.closest(".pitem").remove(); tot(); } if(e.target.classList.contains("iAdd")) e.target.closest(".pitem").querySelector(".iA").insertAdjacentHTML("beforeend", appRowHtml()); if(e.target.classList.contains("aX")) { e.target.closest(".approw").remove(); tot(); } });
+  m.querySelector("#apByCrop").onclick = () => { const c = val(m,"apC"); m.querySelectorAll("input[name=apF]").forEach(x => { if(c && x.dataset.crop === c) x.checked = true; }); tot(); };
+  const mk = m.querySelector("#apMake"); if(mk) mk.onclick = async () => { const pl = readPlan(m, p); await save("agroplans", pl); let n = 0; let num0 = Math.max(0, ...S.ops.map(x => Number(x.number) || 0));
+    for(const f of planFields(pl)) for(const [i, it] of (pl.items || []).entries()){ if(S.ops.some(o => o.planId === pl.id && o.planItem === i && o.fieldId === f.id)) continue;
+      await save("ops", { number: ++num0, planId: pl.id, planItem: i, fieldId: f.id, season: pl.season, status: "planned", workType: it.workType, workGroup: (Object.entries(WORKS).find(([g, ts]) => ts.includes(it.workType)) || ["Інше"])[0], plannedFrom: it.plannedFrom, plannedTo: it.plannedTo, plannedArea: num(f.area), applications: it.applications, machineIds: [], driverIds: [], responsible: pl.responsible || "" }); n++; }
+    closeModal(); toast(n ? `Створено агрооперацій: ${n}` : "Усі агрооперації вже створені"); };
+}
+function recDialog(r){
+  const isNew = !r; r = r || { date: today(), status: "new", applications: [], fieldIds: [] };
+  const fields = [...S.fields].filter(f => !f.archived).sort((a,b)=>a.name.localeCompare(b.name,"uk",{numeric:true}));
+  const m = openModal({ title: isNew ? "Нова агрорекомендація" : "Агрорекомендація", wide: true,
+    body: `<div class="f"><label>Дата<input id="rcD" type="date" value="${esc(r.date||"")}"></label><label>Виконати до<input id="rcDu" type="date" value="${esc(r.dueDate||"")}"></label><label>Автор<input id="rcA" value="${esc(r.author||"")}"></label><label>Статус<select id="rcS">${Object.entries(REC_STATUS).map(([k,v]) => opt(k, v[0], r.status)).join("")}</select></label>
+      <label>Рекомендована робота<select id="rcW">${workTypeOptions(r.workType || "Обприскування")}</select></label><label>Підстава (огляд)<select id="rcSc">${opt("", "—", r.scoutId)}${[...S.scoutreports].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,50).map(x => opt(x.id, fdate(x.date) + " · " + (nameOf("fields", x.fieldId)||""), r.scoutId)).join("")}</select></label>
+      <label class="full">Поля<div class="checks">${fields.map(f => `<label><input type="checkbox" name="rcF" value="${esc(f.id)}" ${(r.fieldIds||[]).includes(f.id)?"checked":""}>${esc(f.name)}</label>`).join("")}</div></label>
+      <label class="full">Обґрунтування і умови<textarea id="rcT">${esc(r.text||"")}</textarea></label></div>
+    <div><b>Матеріали (норма на 1 га)</b><div class="apps" id="apps" style="margin-top:6px">${(r.applications||[]).map(appRowHtml).join("")}</div><button class="btn sm" type="button" id="addApp" style="margin-top:6px">+ Матеріал</button></div>`,
+    extra: isNew ? "" : `<button class="btn" type="button" id="rcMake">Створити агрооперації</button>`,
+    onDelete: isNew ? null : async () => remove("recommendations", r.id),
+    onSave: async (m) => !!(await save("recommendations", readRec(m)))
+  });
+  const readRec = (m) => Object.assign({}, r, { date: val(m,"rcD"), dueDate: val(m,"rcDu"), author: val(m,"rcA"), status: val(m,"rcS"), workType: val(m,"rcW"), scoutId: val(m,"rcSc"), fieldIds: checked(m,"rcF"), text: val(m,"rcT"), applications: [...m.querySelectorAll("#apps .approw")].map(x => ({ productId: x.querySelector(".aP").value, rate: num(x.querySelector(".aR").value), unit: x.querySelector(".aU").value })).filter(a => a.productId) });
+  m.querySelector("#addApp").onclick = () => m.querySelector("#apps").insertAdjacentHTML("beforeend", appRowHtml());
+  m.querySelector("#apps").addEventListener("click", e => { if(e.target.classList.contains("aX")) e.target.closest(".approw").remove(); });
+  const mk = m.querySelector("#rcMake"); if(mk) mk.onclick = async () => { const rr = readRec(m); let n = 0, num0 = Math.max(0, ...S.ops.map(x => Number(x.number) || 0));
+    for(const fid of rr.fieldIds){ const f = byId("fields", fid); await save("ops", { number: ++num0, recId: rr.id, fieldId: fid, season: state.season, status: "planned", workType: rr.workType, workGroup: (Object.entries(WORKS).find(([g, ts]) => ts.includes(rr.workType)) || ["Інше"])[0], plannedFrom: today(), plannedTo: rr.dueDate || "", plannedArea: f ? num(f.area) : "", applications: rr.applications, machineIds: [], driverIds: [], note: rr.text }); n++; }
+    await save("recommendations", Object.assign({}, rr, { status: "accepted" })); closeModal(); toast(`Створено агрооперацій: ${n}`); };
+}
+function removalDialog(){
+  const cur = S.settings.find(x => x.id === "nutrition") || { id: "nutrition" }; const rem = Object.assign({}, DEFAULT_REMOVAL, cur.removal || {});
+  const crops = [...new Set([...Object.keys(rem), ...S.fields.map(f => fieldCrop(f)).filter(Boolean)])];
+  openModal({ title: "Винос елементів живлення, кг на 1 т основної продукції", wide: true,
+    body: `<div class="tw"><table><thead><tr><th>Культура</th><th class="n">N</th><th class="n">P₂O₅</th><th class="n">K₂O</th></tr></thead><tbody>${crops.map((c, i) => `<tr><td>${esc(c)}</td>${[0,1,2].map(j => `<td class="n"><input class="rm" data-c="${esc(c)}" data-j="${j}" inputmode="decimal" value="${esc(rem[c] ? rem[c][j] : "")}" style="width:80px;text-align:right;border:1px solid var(--line);border-radius:6px;padding:4px 6px;background:var(--surface)"></td>`).join("")}</tr>`).join("")}</tbody></table></div><p class="note">Значення за замовчуванням орієнтовні, з урахуванням побічної продукції. Звірте з вашими агрохімічними даними.</p>`,
+    onSave: async (m) => { const out = {}; m.querySelectorAll(".rm").forEach(x => { const c = x.dataset.c; (out[c] ||= [0,0,0])[Number(x.dataset.j)] = num(x.value); }); return !!(await save("settings", Object.assign({}, cur, { id: "nutrition", removal: out }))); }
+  });
+}
+function planAction(a, d){
+  if(a === "newAgroplan"){ agroplanDialog(null); return true; }
+  if(a === "newRec"){ recDialog(null); return true; }
+  if(a === "removalSettings"){ removalDialog(); return true; }
+  if(a === "csvNutrition" && state._nutrition){ exportCsv("План живлення " + state.season, ["Поле","Група","Культура","План, ц/га","Потреба N","Потреба P2O5","Потреба K2O","Внесено N","Внесено P2O5","Внесено K2O"], state._nutrition.map(r => [r.f.name, r.f.group, r.s.crop, r.s.plannedYield, ...(r.need || ["","",""]).map(v => v === "" ? "" : +v.toFixed(1)), ...r.applied.map(v => +v.toFixed(1))])); return true; }
+  return false;
+}
+
 /* ---------- attached files ---------- */
 const fmtSize = b => b > 1048576 ? fmt(b / 1048576, 1) + " МБ" : fmt(b / 1024, 0) + " КБ";
 async function attachFiles(m, col, id){
@@ -2509,7 +2620,7 @@ async function dropDemo(){
 }
 
 /* ---------- render & events ---------- */
-const VIEWS = { scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
+const VIEWS = { plans:viewPlans, scout:viewScout, fuel:viewFuel, harvest:viewHarvest, wms:viewWms, land:viewLand, dash:viewDash, fields:viewFields, rotation:viewRotation, ops:viewOps, machines:viewMachines, tasks:viewTasks, service:viewServiceFull, refs:viewRefs, reports:viewReports };
 function render(){
   const main = document.getElementById("main");
   const ae = document.activeElement; const focusId = ae && ae.id && main.contains(ae) ? ae.id : null; const caret = focusId && ae.selectionStart;
@@ -2529,7 +2640,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -2551,6 +2662,7 @@ main.addEventListener("click", e => {
     if(wmsAction(a, d)) return;
     if(techAction(a, d)) return;
     if(agroAction(a, d)) return;
+    if(planAction(a, d)) return;
     if(a==="newProduct") return simpleDialog("products", null, "матеріал", productFields);
     if(a==="newImpl") return simpleDialog("implements", null, "обладнання", implFields);
     if(a==="newPerson") return simpleDialog("people", null, "людина", personFields);
@@ -2566,6 +2678,9 @@ main.addEventListener("click", e => {
   if(d.reftab){ state.refTab = d.reftab; return render(); }
   if(d.reptab){ state.repTab = d.reptab; return render(); }
   if(d.rot) return rotationDialog(d.rot, Number(d.y));
+  if(d.plantab){ state.planTab = d.plantab; return render(); }
+  if(d.agroplan) return agroplanDialog(byId("agroplans", d.agroplan));
+  if(d.rec) return recDialog(byId("recommendations", d.rec));
   if(d.scouttab){ state.scoutTab = d.scouttab; return render(); }
   if(d.scout) return scoutDialog(byId("scoutreports", d.scout));
   if(d.scouttask) return scoutTaskDialog(byId("scouttasks", d.scouttask));
@@ -2635,7 +2750,7 @@ document.addEventListener("click", e => { if(e.target.id === "menuBtn") document
 document.addEventListener("keydown", e => { if(e.key === "Escape" && document.getElementById("modalRoot").innerHTML) closeModal(); });
 
 /* attach the files block to dialogs of saved records */
-[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["harvDialog","harvests"],["scoutDialog","scoutreports"],["noteDialog","notes"],["waybillDialog","waybills"],["fuelingDialog","fuelings"],["opDialog","ops"]].forEach(([fn, col]) => {
+[["parcelDialog","parcels"],["docDialog","leases"],["ownerDialog","owners"],["machineDialog","machines"],["fieldDialog","fields"],["whDocDialog","whdocs"],["invoiceDialog","invoices"],["serviceDialog","service"],["harvDialog","harvests"],["scoutDialog","scoutreports"],["noteDialog","notes"],["recDialog","recommendations"],["agroplanDialog","agroplans"],["waybillDialog","waybills"],["fuelingDialog","fuelings"],["opDialog","ops"]].forEach(([fn, col]) => {
   const orig = window[fn];
   window[fn] = function(rec, ...rest){ const r = orig.call(this, rec, ...rest); if(rec && rec.id) attachFiles(lastModal(), col, rec.id); return r; };
 });
