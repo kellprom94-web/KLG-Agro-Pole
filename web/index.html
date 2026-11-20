@@ -171,6 +171,10 @@ tr:last-child td{border-bottom:0}
 .gdd{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}.gdd b{display:block;font-size:18px;font-weight:500}.gdd span{font-size:11px;color:var(--muted)}
 .fpcharts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
 @media (max-width:1200px){.fprow1{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.fpmapcard{grid-column:1/-1}}
+.trkpanel{position:fixed;left:12px;right:12px;bottom:12px;z-index:40;max-width:560px;margin:0 auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.25);padding:12px 14px}
+.trkhead{display:flex;gap:10px;align-items:baseline;margin-bottom:6px}.trkhead b{color:var(--bad)}
+.trkbody{display:flex;gap:12px;align-items:center}.trksvg{flex:none;width:120px;min-height:80px;background:var(--paper);border-radius:6px;display:grid;place-items:center}
+.trkbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.trkbtns .btn{min-height:44px}
 @media (max-width:900px){
   .fpside{position:static;flex:1 1 100%}.fpside nav{flex-direction:row;overflow-x:auto}.fpside nav a{white-space:nowrap}.fpthumb{display:none}
   .fprow1,.fpcharts{grid-template-columns:1fr}
@@ -712,7 +716,7 @@ function viewFields(){
     .sort((a,b)=> (a.group||"").localeCompare(b.group||"","uk") || a.name.localeCompare(b.name,"uk",{numeric:true}));
   const sel = state.fieldSel && byId("fields", state.fieldSel);
   let lastG = null;
-  return header("Поля і карта", `<button class="btn" type="button" data-act="import">Імпорт контурів KML/GeoJSON</button><button class="btn" type="button" data-act="csvFields">Експорт</button><button class="btn" type="button" data-act="drawField">Намалювати поле на карті</button><button class="btn pri" type="button" data-act="newField">+ Поле</button>`) + statusBanner() + `
+  return header("Поля і карта", `<button class="btn" type="button" data-act="import">Імпорт контурів KML/GeoJSON</button><button class="btn" type="button" data-act="trackNew">📍 Нове поле треком</button><button class="btn" type="button" data-act="csvFields">Експорт</button><button class="btn" type="button" data-act="drawField">Намалювати поле на карті</button><button class="btn pri" type="button" data-act="newField">+ Поле</button>`) + statusBanner() + `
   <div class="grid g2">
     <div>
       <div class="filters"><input id="fq" placeholder="Пошук: поле, група, культура" value="${esc(state.fieldQ)}" style="flex:1;min-width:180px">
@@ -2881,7 +2885,7 @@ function viewFieldPage(){
   }
   if(T === "area"){
     const ring = (f.contours || [])[0] || [];
-    body = `<div class="grid g2"><div class="card"><h2>Контур</h2>${mapHtml("fieldpage", [f], parcels)}<div class="filters" style="margin-top:10px"><button class="btn" type="button" data-act="fpRedraw" data-id="${esc(f.id)}">${f.contours ? "Перемалювати все" : "Намалювати контур"}</button>${f.contours ? `<button class="btn" type="button" data-act="fpAddPart" data-id="${esc(f.id)}">+ Додати ще контур</button>` : ""}${f.contours ? `<button class="btn" type="button" data-act="fpGeo" data-id="${esc(f.id)}">Вивантажити GeoJSON</button><button class="btn" type="button" data-act="fpKml" data-id="${esc(f.id)}">Вивантажити KML</button>` : ""}</div></div>
+    body = `<div class="grid g2"><div class="card"><h2>Контур</h2>${mapHtml("fieldpage", [f], parcels)}<div class="filters" style="margin-top:10px"><button class="btn" type="button" data-act="fpRedraw" data-id="${esc(f.id)}">${f.contours ? "Перемалювати все" : "Намалювати контур"}</button>${f.contours ? `<button class="btn" type="button" data-act="fpAddPart" data-id="${esc(f.id)}">+ Додати ще контур</button>` : ""}<button class="btn" type="button" data-act="fpTrack" data-id="${esc(f.id)}">📍 Записати треком</button>${f.contours ? `<button class="btn" type="button" data-act="fpGeo" data-id="${esc(f.id)}">Вивантажити GeoJSON</button><button class="btn" type="button" data-act="fpKml" data-id="${esc(f.id)}">Вивантажити KML</button>` : ""}</div></div>
       <div class="card">${(f.contours || []).length > 1 ? `<h2>Контури поля (${f.contours.length})</h2><div class="tw" style="margin-bottom:14px"><table><thead><tr><th>Контур</th><th class="n">Площа, га</th><th></th></tr></thead><tbody>${f.contours.map((r, i) => `<tr><td>Частина ${i + 1}</td><td class="n">${fmt(ringArea(r), 2)}</td><td style="text-align:right"><button class="btn sm danger" type="button" data-act="fpDelPart" data-id="${esc(f.id)}" data-i="${i}">Видалити</button></td></tr>`).join("")}</tbody></table></div>` : ""}<h2>Площа</h2><dl class="dl"><dt>Оброблювальна</dt><dd>${fmt(num(f.area))} га</dd><dt>Офіційна</dt><dd>${f.officialArea ? fmt(num(f.officialArea)) + " га" : "—"}</dd><dt>Розрахункова (за контуром)</dt><dd>${f.calcArea ? fmt(num(f.calcArea), 4) + " га" : "—"}</dd><dt>Периметр</dt><dd>${ring.length ? fmt(perimeterKm(ring), 2) + " км" : "—"}</dd><dt>Полігонів у контурі</dt><dd>${(f.contours||[]).length}</dd><dt>Точок у контурі</dt><dd>${sum(f.contours||[], r => r.length)}</dd>${fieldCenter(f) ? `<dt>Центр поля</dt><dd>${fieldCenter(f)[1].toFixed(5)}, ${fieldCenter(f)[0].toFixed(5)}</dd>` : ""}${f.cadastre ? `<dt>Кадастрові номери</dt><dd>${esc(f.cadastre)}</dd>` : ""}</dl></div></div>`;
   }
   if(T === "land"){
@@ -2899,6 +2903,7 @@ function downloadText(name, text, type){ const a = document.createElement("a"); 
 function fieldPageAction(a, d){
   if(a === "fieldNote"){ noteDialog(null, { fieldId: d.id }); return true; }
   if(a === "fpRedraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); startDraw("fieldpage", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); return true; }
+  if(a === "fpTrack"){ trackFieldDialog(d.id); return true; }
   if(a === "fpAddPart"){ const fid = d.id; toast("Клацайте по краях додаткового контуру на карті"); startDraw("fieldpage", async rings => { const f = byId("fields", fid); if(!f) return; const cs = [...(f.contours || []), ...rings]; const ca = +contourArea(cs).toFixed(2); await save("fields", Object.assign({}, f, { contours: cs, calcArea: ca })); toast("Контур додано. Розрахункова площа: " + fmt(ca) + " га"); }); return true; }
   if(a === "fpDelPart"){ const f = byId("fields", d.id); const i = Number(d.i); if(!f || !f.contours || !f.contours[i]) return true;
     confirmBox(`Видалити контур ${i + 1} (${fmt(ringArea(f.contours[i]))} га)?`, async () => { const cs = f.contours.filter((_, k) => k !== i); const ca = +contourArea(cs).toFixed(2); await save("fields", Object.assign({}, f, { contours: cs.length ? cs : null, calcArea: cs.length ? ca : "" })); toast("Контур видалено"); }); return true; }
@@ -3056,6 +3061,74 @@ function aoStockHtml(limit){
   <div class="kpis">${Object.entries(byWh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="kpi"><b>${fmt0(v)}</b><span>грн · ${esc(k)}</span></div>`).join("")}${low.length ? `<div class="kpi"><b style="color:var(--bad)">${low.length}</b><span>позицій нижче мінімуму</span></div>` : ""}</div>
   <div class="tw"><table><thead><tr><th>Матеріал</th><th>Склад</th><th>Відділення</th><th class="n">Залишок</th><th class="n">Сер. ціна</th><th class="n">Сума, грн</th></tr></thead><tbody>${list.map(r => `<tr${num(r.min) && num(r.qty) < num(r.min) ? ' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"' : ""}><td>${esc(r.itemName || "")}</td><td>${esc(r.whName || r.wh || "")}</td><td>${esc(r.div || "")}</td><td class="n">${fmt(num(r.qty), 2)} ${esc(r.unit || "")}</td><td class="n">${r.avgPrice ? fmt(num(r.avgPrice), 2) : "—"}</td><td class="n">${fmt0(num(r.value))}</td></tr>`).join("")}</tbody></table></div>${limit && R.length > limit ? `<p class="note"><a href="#wms" data-wmstab="aostock">Усі залишки (${R.length}) →</a></p>` : ""}<p class="note">Дані з АгроОбліку, оновлюються автоматично.</p>`;
 }
+/* ---------- record a field contour by GPS track (drive around the field) ---------- */
+let TRK = null;
+const trkDist = (a, b) => { const R = 6371000, dl = (b[1] - a[1]) * Math.PI / 180, dn = (b[0] - a[0]) * Math.PI / 180, m = Math.cos((a[1] + b[1]) / 2 * Math.PI / 180); return R * Math.hypot(dl, dn * m); };
+function trkSimplify(pts, tol){ if(pts.length < 3) return pts; const m = Math.cos(pts[0][1] * Math.PI / 180), k = 111320;
+  const P = pts.map(p => [p[0] * k * m, p[1] * k]); const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const st = [[0, pts.length - 1]]; while(st.length){ const [a, b] = st.pop(); let mx = 0, idx = -1; const [x1, y1] = P[a], [x2, y2] = P[b], L = Math.hypot(x2 - x1, y2 - y1) || 1e-9;
+    for(let i = a + 1; i < b; i++){ const d = Math.abs((y2 - y1) * P[i][0] - (x2 - x1) * P[i][1] + x2 * y1 - y2 * x1) / L; if(d > mx){ mx = d; idx = i; } }
+    if(mx > tol && idx > 0){ keep[idx] = 1; st.push([a, idx], [idx, b]); } }
+  return pts.filter((_, i) => keep[i]); }
+function trkSave(){ try { localStorage.setItem("ap-track", JSON.stringify({ pts: TRK.pts, fid: TRK.fid, mode: TRK.mode })); } catch(e){} }
+function trkPanel(){
+  let el = document.getElementById("trkPanel"); if(!TRK){ if(el) el.remove(); return; }
+  if(!el){ el = document.createElement("div"); el.id = "trkPanel"; el.className = "trkpanel"; document.body.appendChild(el); }
+  const pts = TRK.pts, len = pts.reduce((a, p, i) => i ? a + trkDist(pts[i - 1], p) : 0, 0), ring = pts.length > 2 ? [...pts, pts[0]] : null;
+  const ha = ring ? ringArea(ring) : 0, gap = pts.length > 2 ? trkDist(pts[pts.length - 1], pts[0]) : 0;
+  let svg = ""; if(pts.length > 1){ let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; pts.forEach(([x, y]) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); });
+    const k = Math.cos(y0 * Math.PI / 180), sw = (x1 - x0) * k || 1e-6, sh = (y1 - y0) || 1e-6, sc = Math.min(100 / sw, 100 / sh);
+    const pp = pts.map(([x, y]) => [10 + (x - x0) * k * sc, 10 + (y1 - y) * sc]); const last = pp[pp.length - 1];
+    svg = `<svg viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Записаний трек"><polygon points="${pp.map(p => p.join(",")).join(" ")}" fill="var(--stripe)" fill-opacity=".15" stroke="none"/><polyline points="${pp.map(p => p.join(",")).join(" ")}" fill="none" stroke="var(--stripe)" stroke-width="2"/><circle cx="${pp[0][0]}" cy="${pp[0][1]}" r="4" fill="var(--link)"/><circle cx="${last[0]}" cy="${last[1]}" r="4" fill="var(--bad)"/></svg>`; }
+  el.innerHTML = `<div class="trkhead"><b>${TRK.paused ? "⏸ Пауза" : "● Запис треку"}</b><span class="note">${esc(TRK.title)}</span></div>
+    <div class="trkbody"><div class="trksvg">${svg || '<div class="note" style="padding:20px 6px">Чекаю GPS…</div>'}</div>
+    <dl class="dl" style="flex:1"><dt>Точок</dt><dd>${pts.length}</dd><dt>Пройдено</dt><dd>${fmt(len / 1000, 2)} км</dd><dt>Площа</dt><dd>${ha ? fmt(ha, 2) + " га" : "—"}</dd><dt>Точність GPS</dt><dd>${TRK.acc != null ? "±" + fmt0(TRK.acc) + " м" + (TRK.acc > 15 ? " (слабко)" : "") : "—"}</dd><dt>До старту</dt><dd>${pts.length > 2 ? fmt0(gap) + " м" : "—"}</dd></dl></div>
+    ${TRK.err ? `<div class="banner err">${esc(TRK.err)}</div>` : ""}
+    <div class="trkbtns"><button class="btn" type="button" data-trk="pause">${TRK.paused ? "Продовжити" : "Пауза"}</button><button class="btn" type="button" data-trk="undo"${pts.length ? "" : " disabled"}>Скасувати 10 точок</button><button class="btn danger" type="button" data-trk="cancel">Скасувати</button><button class="btn pri" type="button" data-trk="finish"${pts.length > 2 ? "" : " disabled"}>Завершити і замкнути</button></div>
+    <p class="note" style="margin:6px 0 0">Тримайте телефон в авто, екран не вимикайте. Їдьте по межі поля; точки з точністю гірше 25 м пропускаються.</p>`;
+}
+async function trkWake(){ try { if(navigator.wakeLock) TRK.wake = await navigator.wakeLock.request("screen"); } catch(e){} }
+function startTrack(opts){
+  if(!navigator.geolocation){ toast("Цей пристрій не підтримує GPS у браузері"); return; }
+  if(TRK) return toast("Запис уже йде");
+  let saved = null; try { saved = JSON.parse(localStorage.getItem("ap-track") || "null"); } catch(e){}
+  TRK = Object.assign({ pts: [], paused: false, acc: null, err: "" }, opts);
+  if(saved && saved.pts && saved.pts.length && saved.fid === opts.fid && saved.mode === opts.mode && confirm("Знайдено незавершений трек (" + saved.pts.length + " точок). Продовжити його?")) TRK.pts = saved.pts;
+  TRK.watch = navigator.geolocation.watchPosition(pos => {
+    if(!TRK) return; const c = pos.coords; TRK.acc = c.accuracy; TRK.err = "";
+    if(!TRK.paused && c.accuracy <= 25){ const p = [+c.longitude.toFixed(7), +c.latitude.toFixed(7)]; const last = TRK.pts[TRK.pts.length - 1];
+      if(!last || trkDist(last, p) >= 3){ TRK.pts.push(p); if(TRK.pts.length % 5 === 0) trkSave(); } }
+    trkPanel();
+  }, err => { if(!TRK) return; TRK.err = err.code === 1 ? "Немає дозволу на геолокацію. Дозвольте доступ до місцезнаходження в налаштуваннях браузера." : "GPS недоступний: " + err.message; trkPanel(); }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  trkWake(); document.addEventListener("visibilitychange", trkVis); trkPanel();
+}
+function trkVis(){ if(TRK && document.visibilityState === "visible") trkWake(); }
+function stopTrack(){ if(!TRK) return; try { navigator.geolocation.clearWatch(TRK.watch); } catch(e){} try { TRK.wake && TRK.wake.release(); } catch(e){} document.removeEventListener("visibilitychange", trkVis); try { localStorage.removeItem("ap-track"); } catch(e){} TRK = null; trkPanel(); }
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-trk]"); if(!b || !TRK) return; const a = b.dataset.trk;
+  if(a === "pause"){ TRK.paused = !TRK.paused; trkSave(); trkPanel(); }
+  if(a === "undo"){ TRK.pts.splice(-10); trkSave(); trkPanel(); }
+  if(a === "cancel"){ if(confirm("Скасувати запис треку? Точки буде втрачено.")) stopTrack(); }
+  if(a === "finish"){
+    const simp = trkSimplify(TRK.pts, 2); if(simp.length < 3){ toast("Замало точок для контуру"); return; }
+    const ring = [...simp, simp[0]]; const onDone = TRK.onDone; stopTrack(); onDone([ring]);
+  }
+});
+function trackFieldDialog(fid){
+  const f = fid && byId("fields", fid);
+  openModal({ title: "Записати контур треком", saveLabel: "Почати запис",
+    body: `<p>Покладіть телефон в авто і об'їдьте поле по межі. Програма записує GPS-точки, а коли натиснете «Завершити», замкне контур і порахує площу.</p>
+      ${f ? `<label class="fld"><span>Що зробити з треком</span><select id="trMode"><option value="add">Додати як ще один контур поля «${esc(f.name)}»</option><option value="replace"${f.contours ? "" : " selected"}>Замінити контур поля «${esc(f.name)}»</option></select></label>` : `<p class="note">Після запису відкриється картка нового поля.</p>`}
+      <p class="note">Порада: їдьте 10–20 км/год, тримайте телефон біля вікна. Якщо відволіклися, натисніть «Пауза». Відхилення трека від межі до кількох метрів нормальне.</p>`,
+    onSave: m => { const mode = f ? m.querySelector("#trMode").value : "new"; closeModal();
+      startTrack({ fid: fid || "", mode, title: f ? f.name : "Нове поле", onDone: async rings => {
+        const ca = +contourArea(rings).toFixed(2);
+        if(!f) return fieldDialog(null, rings);
+        const cur = byId("fields", f.id) || f; const cs = mode === "add" ? [...(cur.contours || []), ...rings] : rings; const tot = +contourArea(cs).toFixed(2);
+        await save("fields", Object.assign({}, cur, { contours: cs, calcArea: tot, area: num(cur.area) || tot })); toast(`Контур записано: ${fmt(ca)} га${mode === "add" ? " · разом " + fmt(tot) + " га" : ""}`);
+      } }); return false; } });
+}
+
 /* ---------- Telegram notifications ---------- */
 let TGI = null, TGCODE = null;
 async function loadTg(){ try { TGI = await api("/tg/info"); } catch(e){ TGI = { configured: false }; } render(); }
@@ -3296,6 +3369,7 @@ main.addEventListener("click", e => {
     if(a==="undemo") return confirmBox("Видалити всі записи прикладу?", dropDemo);
     if(a==="import") return importDialog();
     if(a==="newField") return fieldDialog(null);
+    if(a==="trackNew") return trackFieldDialog("");
     if(a==="drawField"){ toast("Клацайте по краях поля на карті"); return startDraw("fields", rings => fieldDialog(null, rings)); }
     if(a==="redraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); return startDraw("fields", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); }
     if(a==="editField") return fieldDialog(byId("fields", d.id));
