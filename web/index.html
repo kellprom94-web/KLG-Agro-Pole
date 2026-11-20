@@ -177,6 +177,8 @@ tr:last-child td{border-bottom:0}
 .trkbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.trkbtns .btn{min-height:44px}
 .herebox{position:absolute;left:10px;bottom:34px;z-index:3;background:var(--surface);color:var(--ink);border-radius:6px;padding:6px 10px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3);max-width:calc(100% - 20px)}
 .maplibregl-user-location-dot,.maplibregl-user-location-dot:before{background-color:#1e88e5}
+.legbtn{border:1px solid transparent;background:none;font:inherit;color:inherit;cursor:pointer;border-radius:12px;padding:2px 8px}
+.legbtn:hover{border-color:var(--line)}.legbtn.on{border-color:var(--stripe);background:var(--accent-soft)}
 @media (max-width:900px){
   .fpside{position:static;flex:1 1 100%}.fpside nav{flex-direction:row;overflow-x:auto}.fpside nav a{white-space:nowrap}.fpthumb{display:none}
   .fprow1,.fpcharts{grid-template-columns:1fr}
@@ -273,7 +275,7 @@ const today = () => new Date().toISOString().slice(0,10);
 const state = {
   view: "dash",
   season: Number(lsGet("season")) || curSeason(),
-  fieldSel: null, fieldQ: "", fieldGroup: "",
+  fieldSel: null, fieldQ: "", fieldGroup: "", fieldCrop: "",
   ops: { status:"", group:"", q:"" },
   period: { from: new Date().getFullYear()+"-01-01", to: today() },
   machineId: null, machQ: "",
@@ -592,6 +594,7 @@ function startDraw(key, onDone){
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
 function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
 function pickField(fid){ if(state.view === "fieldpage"){ if(fid && fid !== state.fpId) location.hash = "field-" + fid; return; } openFieldTab(fid); }
+function fieldFiltRefit(){ if(state.mapVB) delete state.mapVB.fields; ["fields", "dash"].forEach(k => { if(MAPS[k]) MAPS[k].fitted = false; }); }
 function fpAllFields(M){ const own = (M.own || [])[0]; const rest = S.fields.filter(f => !f.archived && f.contours && f.contours.length && (!own || f.id !== own.id)); return own ? [own, ...rest] : rest; }
 function attachMaps(){
   document.querySelectorAll(".mapslot").forEach(slot => {
@@ -703,7 +706,7 @@ function viewDash(){
     <div class="kpi"><b style="color:${overdue.length?"var(--bad)":"inherit"}">${overdue.length}</b><span>прострочених ТО</span></div>
   </div>
   <div class="grid g2">
-    <div class="card"><h2>Карта полів · культури ${seasonLabel(state.season)}</h2>${mapHtml("dash", fields)}${legend(fields)}</div>
+    <div class="card"><h2>Карта полів · культури ${seasonLabel(state.season)}</h2><div class="filters">${fieldFilterSelects(fields)}</div>${mapHtml("dash", fieldMapFilter(fields))}${legend(fieldMapFilter(fields), true)}</div>
     <div class="card"><h2>Культури сезону ${seasonLabel(state.season)}</h2>
       ${rows.length ? `<div class="tw"><table><thead><tr><th>Культура</th><th class="n">Площа, га</th><th class="n">План, ц/га</th><th class="n">План, т</th><th class="n">Факт, ц/га</th><th class="n">Урожай, т</th></tr></thead><tbody>
       ${rows.map(([c,o]) => `<tr><td>${cropTag(c)}</td><td class="n">${fmt(o.area)}</td><td class="n">${o.planA?fmt(o.plan*10/o.planA):"—"}</td><td class="n">${o.plan?fmt0(o.plan):"—"}</td><td class="n">${o.factA?fmt(o.fact*10/o.factA):"—"}</td><td class="n">${o.fact?fmt0(o.fact):"—"}</td></tr>`).join("")}
@@ -717,9 +720,17 @@ function viewDash(){
     <div class="card"><h2>Прогрес агрооперацій ${seasonLabel(state.season)}</h2>${opsProgress(ops)}</div>
   </div>`;
 }
-function legend(fields){
+function fieldMapFilter(list){ return list.filter(f => (!state.fieldGroup || (f.group || "") === state.fieldGroup) && (!state.fieldCrop || (fieldCrop(f) || "Не вказана") === state.fieldCrop)); }
+function fieldFilterSelects(list){
+  const groups = [...new Set(list.map(f => f.group || ""))].sort((a, b) => a.localeCompare(b, "uk"));
+  const crops = {}; list.filter(f => !state.fieldGroup || (f.group || "") === state.fieldGroup).forEach(f => { const c = fieldCrop(f) || "Не вказана"; crops[c] = (crops[c] || 0) + num(f.area); });
+  const cs = Object.entries(crops).sort((a, b) => b[1] - a[1]);
+  const any = state.fieldGroup || state.fieldCrop;
+  return `<select id="fg" aria-label="Відділення">${opt("", "Усі відділення", state.fieldGroup)}${groups.map(g => opt(g, g || "Без відділення", state.fieldGroup)).join("")}</select><select id="fcrop" aria-label="Культура">${opt("", "Усі культури", state.fieldCrop)}${cs.map(([c, a]) => opt(c, c + " · " + fmt0(a) + " га", state.fieldCrop)).join("")}${state.fieldCrop && !crops[state.fieldCrop] ? opt(state.fieldCrop, state.fieldCrop, state.fieldCrop) : ""}</select>${any ? `<button class="btn sm" type="button" data-act="fieldFiltReset">Скинути фільтр</button>` : ""}`;
+}
+function legend(fields, clickable){
   const set = {}; fields.forEach(f => { const c = fieldCrop(f) || "Не вказана"; set[c] = (set[c]||0) + num(f.area); });
-  return `<div class="legend">${Object.entries(set).sort((a,b)=>b[1]-a[1]).map(([c,a]) => `<span class="crop"><i class="dot" style="background:${esc(cropColor(c))}"></i>${esc(c)} <span class="muted">${fmt0(a)} га</span></span>`).join("")}</div>`;
+  return `<div class="legend">${Object.entries(set).sort((a,b)=>b[1]-a[1]).map(([c,a]) => clickable || true ? `<button type="button" class="crop legbtn${state.fieldCrop === c ? " on" : ""}" data-cropf="${esc(c)}" title="Показати лише ${esc(c)}"><i class="dot" style="background:${esc(cropColor(c))}"></i>${esc(c)} <span class="muted">${fmt0(a)} га</span></button>` : "").join("")}</div>`;
 }
 function opsProgress(ops){
   if(!ops.length) return `<div class="empty">Агрооперацій у цьому сезоні немає.</div>`;
@@ -733,7 +744,7 @@ function opsProgress(ops){
 function viewFields(){
   const groups = [...new Set(S.fields.map(f => f.group || ""))].sort((a,b)=>a.localeCompare(b,"uk"));
   const q = state.fieldQ.toLowerCase();
-  const list = S.fields.filter(f => (!state.fieldGroup || (f.group||"")===state.fieldGroup) && (!q || (f.name+" "+(f.group||"")+" "+fieldCrop(f)).toLowerCase().includes(q)))
+  const list = fieldMapFilter(S.fields).filter(f => (!q || (f.name+" "+(f.group||"")+" "+fieldCrop(f)).toLowerCase().includes(q)))
     .sort((a,b)=> (a.group||"").localeCompare(b.group||"","uk") || a.name.localeCompare(b.name,"uk",{numeric:true}));
   const sel = state.fieldSel && byId("fields", state.fieldSel);
   let lastG = null;
@@ -741,7 +752,7 @@ function viewFields(){
   <div class="grid g2">
     <div>
       <div class="filters"><input id="fq" placeholder="Пошук: поле, група, культура" value="${esc(state.fieldQ)}" style="flex:1;min-width:180px">
-      <select id="fg">${opt("", "Всі групи", state.fieldGroup)}${groups.map(g=>opt(g, g||"Без групи", state.fieldGroup)).join("")}</select></div>
+      ${fieldFilterSelects(S.fields)}</div>
       <div class="tw"><table><thead><tr><th>Поле</th><th class="n">Площа, га</th><th>Культура ${seasonLabel(state.season)}</th><th>Сорт</th><th>Посів</th><th class="n">Урожайність, ц/га</th></tr></thead><tbody>
       ${list.length ? list.map(f => { const s = fieldSeason(f); let g = ""; if(f.group !== lastG){ lastG = f.group; const gl = list.filter(x=>x.group===f.group); g = `<tr class="grp"><td>${esc(f.group||"Без групи")}</td><td class="n">${fmt(sum(gl,x=>x.area))}</td><td colspan="4" class="muted">${gl.length} пол.</td></tr>`; }
         return g + `<tr class="click" data-field="${esc(f.id)}" style="${state.fieldSel===f.id?"outline:2px solid var(--accent);outline-offset:-2px":""}"><td>${esc(f.name)}${f.contours?"":` <span class="muted" title="немає контуру">◌</span>`}${f.demo?` <span class="pill st-cancel">приклад</span>`:""}</td><td class="n">${fmt(num(f.area))}</td><td>${cropTag(s.crop)}</td><td>${esc(s.variety||"")}</td><td>${fdate(s.sowDate)}</td><td class="n">${s.yield?fmt(num(s.yield)):"—"}</td></tr>`; }).join("")
@@ -750,7 +761,7 @@ function viewFields(){
       <p class="note">Разом: ${list.length} полів, ${fmt(sum(list,f=>f.area))} га.</p>
     </div>
     <div class="grid" style="align-content:start">
-      <div class="card"><h2>Карта · ${state.season}</h2>${mapHtml("fields", list)}${legend(list)}</div>
+      <div class="card"><h2>Карта · ${seasonLabel(state.season)}</h2>${mapHtml("fields", list)}${legend(list)}</div>
       ${sel ? fieldCard(sel) : `<div class="card"><div class="empty">Оберіть поле в таблиці або на карті, щоб побачити його картку.</div></div>`}
     </div>
   </div>`;
@@ -3472,7 +3483,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-aowb],[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-cropf],[data-aowb],[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -3482,6 +3493,7 @@ main.addEventListener("click", e => {
     if(a==="import") return importDialog();
     if(a==="newField") return fieldDialog(null);
     if(a==="trackNew") return trackFieldDialog("");
+    if(a==="fieldFiltReset"){ state.fieldGroup = ""; state.fieldCrop = ""; fieldFiltRefit(); render(); return; }
     if(a==="drawField"){ toast("Клацайте по краях поля на карті"); return startDraw("fields", rings => fieldDialog(null, rings)); }
     if(a==="redraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); return startDraw("fields", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); }
     if(a==="editField") return fieldDialog(byId("fields", d.id));
@@ -3564,6 +3576,7 @@ main.addEventListener("click", e => {
   if(d.op) return opDialog(byId("ops", d.op));
   if(d.machine){ state.machineId = d.machine; return render(); }
   if(d.aowb) return aoWaybillDialog(d.aowb);
+  if(d.cropf != null){ state.fieldCrop = state.fieldCrop === d.cropf ? "" : d.cropf; fieldFiltRefit(); render(); return; }
   if(d.task) return taskDialog(byId("tasks", d.task));
   if(d.service) return serviceDialog(byId("service", d.service));
   if(d.product) return simpleDialog("products", byId("products", d.product), "матеріал", productFields);
@@ -3586,7 +3599,8 @@ main.addEventListener("change", e => {
   if(e.target.id === "aoStWh"){ state.aoStWh = e.target.value; render(); return; }
   if(e.target.dataset && e.target.dataset.aonames){ const f = byId("fields", e.target.dataset.aonames); if(f){ save("fields", Object.assign({}, f, { aoNames: e.target.value.trim() })).then(() => toast("Збережено")); } return; }
   const id = e.target.id;
-  if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
+  if(id==="fg"){ state.fieldGroup = e.target.value; state.fieldCrop = ""; fieldFiltRefit(); render(); }
+  if(id==="fcrop"){ state.fieldCrop = e.target.value; fieldFiltRefit(); render(); }
   if(id==="og"){ state.ops.group = e.target.value; render(); }
   if(id==="lc"){ state.landCouncil = e.target.value; render(); }
   if(id==="fuelSt"){ state.fuelSt = e.target.value; render(); }
