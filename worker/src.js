@@ -1,6 +1,6 @@
 // AgroPulse — Cloudflare Worker: serves the app page and a small document API on D1.
 // Bindings: DB (D1 database). Secret: APP_PASSWORD.
-const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs", "aofields", "aowaybills", "aolzk", "aoitems"]);
+const COLS = new Set(["fields", "ops", "machines", "implements", "people", "products", "tasks", "service", "parcels", "leases", "owners", "payments", "settings", "warehouses", "whdocs", "invoices", "whrequests", "pricelists", "units", "mplans", "norms", "fuelstations", "fuelings", "harvests", "waybills", "elevators", "scoutreports", "scouttasks", "notes", "plantthreats", "agroplans", "recommendations", "costs", "aofields", "aowaybills", "aolzk", "aoitems", "aocosts", "aostock"]);
 const ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const COOKIE = "klg_session";
 let schemaReady = false;
@@ -524,7 +524,7 @@ async function handleTgHook(req, env) {
 }
 
 /* ---------- АгроОблік: приймання даних через конектор (MCP) ---------- */
-const AO_COLS = { fields: "aofields", waybills: "aowaybills", lzk: "aolzk", items: "aoitems" };
+const AO_COLS = { fields: "aofields", waybills: "aowaybills", lzk: "aolzk", items: "aoitems", fieldcosts: "aocosts", stock: "aostock" };
 async function aoMcpPath(env) { return "/mcp/" + (await hmacHex(env.APP_PASSWORD, "agrooblik-mcp")).slice(0, 40); }
 async function aoStatus(env) {
   await ensureSchema(env.DB); const out = {};
@@ -565,7 +565,7 @@ async function aoPush(env, a) {
 }
 const AO_TOOLS = [
   { name: "agrooblik_status", description: "Стан даних АгроОбліку в програмі AgroPulse: скільки записів кожної колекції вже отримано і найбільше значення поля ts (для інкрементальної синхронізації: надсилайте записи з ts більшим за max_ts).", inputSchema: { type: "object", properties: {} } },
-  { name: "agrooblik_push", description: "Записати в AgroPulse записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку. all_ids: повний список id колекції в АгроОбліку (можна надіслати з порожнім records окремим викликом після всіх частин) — усе, чого в ньому немає, буде позначено видаленим. Надсилайте не більше 500 записів за виклик.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } }, all_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
+  { name: "agrooblik_push", description: "Записати в AgroPulse записи з бази артефакту АгроОблік. collection: fields | waybills | lzk | items | fieldcosts | stock. fieldcosts — готові витрати по полю за сезон з АгроОбліку: {id, season, fieldId, field, division, crop, area, cats:{«Насіння»:грн, «Добрива»:…, «ЗЗР»:…, «ПММ»:…, «Оплата праці»:…, «Оренда землі (паї)»:…, «Ремонт техніки»:…, «Послуги сторонніх»:…, «Зберігання і доробка»:…, «Загальновиробничі»:…, «Інше»:…}, total, income?}. stock — поточні залишки складу: {id, div, wh, whName, itemId, itemName, unit, qty, avgPrice, value, min}. records: масив документів у тому вигляді, як їх повертає база артефакту ({id, data:{...}}) або плоскі об'єкти з полем id. Повторне надсилання того самого запису його оновлює, дублікатів не буде. replace_all=true означає, що надіслано ПОВНИЙ список колекції, і записи, яких у ньому немає, буде позначено видаленими (використовуйте тільки коли надсилаєте всю колекцію одним викликом). deleted_ids: id записів, видалених в АгроОбліку. all_ids: повний список id колекції в АгроОбліку (можна надіслати з порожнім records окремим викликом після всіх частин) — усе, чого в ньому немає, буде позначено видаленим. Надсилайте не більше 500 записів за виклик.", inputSchema: { type: "object", properties: { collection: { type: "string", enum: Object.keys(AO_COLS) }, records: { type: "array", items: { type: "object" } }, replace_all: { type: "boolean" }, deleted_ids: { type: "array", items: { type: "string" } }, all_ids: { type: "array", items: { type: "string" } } }, required: ["collection", "records"] } },
 ];
 async function handleMcp(req, env) {
   if (req.method === "GET") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });

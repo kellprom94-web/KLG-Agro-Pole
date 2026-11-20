@@ -253,7 +253,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs","aofields","aowaybills","aolzk","aoitems"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs","aofields","aowaybills","aolzk","aoitems","aocosts","aostock"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -688,6 +688,7 @@ function viewDash(){
   </div>
   <div class="grid g2" style="margin-top:16px">
     <div class="card"><h2>Останні операції техніки</h2>${recentMachineOpsHtml(10)}</div>
+    ${S.aostock.length ? `<div class="card"><h2>Залишки складу · АгроОблік</h2>${aoStockHtml(8)}</div>` : ""}
     <div class="card"><h2>Прогрес агрооперацій ${seasonLabel(state.season)}</h2>${opsProgress(ops)}</div>
   </div>`;
 }
@@ -1800,10 +1801,10 @@ function stockOf(w, p, until){ const x = stockReplay(until).st[w + "|" + p]; ret
 
 function viewWms(){
   const T = state.wmsTab;
-  const tabs = [["stock","Залишки"],["receipt","Надходження"],["issue","Вибуття"],["transfer","Переміщення"],["requests","Запити"],["inventory","Інвентаризація"],["invoices","Вхідні рахунки"],["production","Акти виробництва"],["items","Номенклатура"],["prices","Прайс-листи"],["warehouses","Склади"],["units","Одиниці виміру"],["reports","Звіти"]];
+  const tabs = [["stock","Залишки"],["aostock","Залишки АгроОблік"],["receipt","Надходження"],["issue","Вибуття"],["transfer","Переміщення"],["requests","Запити"],["inventory","Інвентаризація"],["invoices","Вхідні рахунки"],["production","Акти виробництва"],["items","Номенклатура"],["prices","Прайс-листи"],["warehouses","Склади"],["units","Одиниці виміру"],["reports","Звіти"]];
   let body;
   if(DOC_KINDS[T]) body = wmsDocList(T);
-  else body = ({ stock: wmsStock, requests: wmsRequests, invoices: wmsInvoices, items: wmsItems, prices: wmsPrices, warehouses: wmsWarehouses, units: wmsUnits, reports: wmsReports }[T] || wmsStock)();
+  else body = ({ aostock: () => `<div class="card">${aoStockHtml(0)}</div>`, stock: wmsStock, requests: wmsRequests, invoices: wmsInvoices, items: wmsItems, prices: wmsPrices, warehouses: wmsWarehouses, units: wmsUnits, reports: wmsReports }[T] || wmsStock)();
   return header("Склад", `<button class="btn" type="button" data-act="whNew" data-kind="receipt">+ Надходження</button><button class="btn" type="button" data-act="whNew" data-kind="issue">+ Вибуття</button><button class="btn pri" type="button" data-act="whNew" data-kind="transfer">+ Переміщення</button>`) + statusBanner() +
     `<div class="tabs">${tabs.map(([k,l]) => `<button type="button" class="${T===k?"on":""}" data-wmstab="${k}">${esc(l)}</button>`).join("")}</div>` + body;
 }
@@ -2754,7 +2755,7 @@ function tsChart(dates, series, opt = {}){
 function wxIcon(code){ const c = Number(code); return c === 0 ? "☀" : c <= 2 ? "⛅" : c === 3 ? "☁" : c < 60 ? "🌫" : c < 70 ? "🌧" : c < 80 ? "❄" : c < 90 ? "🌦" : "⛈"; }
 function gddSum(sr, fromDate, base){ let t = 0; sr.date.forEach((d, i) => { if(d >= fromDate && sr.tmax[i] != null) t += Math.max(0, (sr.tmax[i] + sr.tmin[i]) / 2 - base); }); return t; }
 function fpClimateFill(f, d){
-  const sr = (d && d.series) || { date: [] }; const s = fieldSeason(f); const sow = s.sowDate || ""; const jan = state.season + "-01-01";
+  const sr = (d && d.series) || { date: [], tmax: [], tmin: [], precip: [], sm0: [], sm1: [], sm2: [] }; const s = fieldSeason(f); const sow = s.sowDate || ""; const jan = state.season + "-01-01";
   const g = document.getElementById("fpGdd"); if(g) g.innerHTML = [5, 10, 15].map(b => `<div><b>${sow ? fmt0(gddSum(sr, sow, b)) : "—"}</b><span>з дати сівби (&gt;+${b}°)</span></div><div><b>${sr.date.some(x => x >= jan) ? fmt0(gddSum(sr, jan, b)) : "—"}</b><span>з початку року (&gt;+${b}°)</span></div>`).join("");
   const now = document.getElementById("fpNow"); const cur = d && d.current; const hr = d && d.hourly;
   if(now) now.innerHTML = cur ? `<div style="display:flex;gap:14px;align-items:center"><div><div style="font-size:30px;font-weight:500">${fmt(cur.temperature_2m, 0)}° <span aria-hidden="true">${wxIcon(cur.weather_code)}</span></div><div class="note">${fmt(cur.wind_speed_10m / 3.6, 0)} м/с · ${esc(wmo(cur.weather_code))}</div></div><div style="flex:1;display:grid;gap:3px;font-size:12px">${hr ? [4, 8, 12, 16].filter(i => hr.time[i]).map(i => `<div style="display:flex;gap:8px;justify-content:space-between"><span class="muted">${hr.time[i].slice(11, 16)}</span><span aria-hidden="true">${wxIcon(hr.weather_code[i])}</span><b>${fmt(hr.temperature_2m[i], 0)}°</b><span>${fmt(hr.wind_speed_10m[i] / 3.6, 0)} м/с</span></div>`).join("") : ""}</div></div>` : `<p class="note">Погода недоступна.</p>`;
@@ -2784,6 +2785,8 @@ async function fpPhotosFill(){
 }
 function fpCostRows(f){
   const r = computeEconomics(state.season).find(x => x.f.id === f.id); const area = num(f.area);
+  if(r && r.ao){ const cats = AO_CATS.map(k => [k, num(r.ao.cats[k])]).filter(x => x[1]); Object.keys(r.ao.cats).filter(k => !AO_CATS.includes(k) && num(r.ao.cats[k])).forEach(k => cats.push([k, num(r.ao.cats[k])])); const tot = cats.reduce((a, x) => a + x[1], 0);
+    return `<div class="tw" style="border:0"><table><thead><tr><th>Стаття</th><th class="n">Факт, грн</th><th class="n">грн/га</th></tr></thead><tbody>${cats.map(([l, v]) => `<tr><td>${esc(l)}</td><td class="n">${fmt0(v)}</td><td class="n">${area ? fmt0(v / area) : "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Витрат ще немає</td></tr>`}<tr class="grp"><td>Всього</td><td class="n">${fmt0(tot)}</td><td class="n">${area ? fmt0(tot / area) : "—"}</td></tr></tbody></table></div><p class="note">Розраховано в АгроОбліку (шляхові листи, ЛЗК, зарплата, оренда).</p>`; }
   const rows = [["Матеріали (склад)", r ? r.materials + r.matEst : 0], ["Пальне", r ? r.fuel : 0], ["Оренда землі", r ? r.rent : 0], ["Прямі інші витрати", r ? r.direct : 0], ["Накладні", r ? r.overhead : 0]];
   const tot = rows.reduce((a, x) => a + x[1], 0);
   return `<div class="tw" style="border:0"><table><thead><tr><th>Стаття</th><th class="n">Факт, грн</th><th class="n">грн/га</th></tr></thead><tbody>${rows.map(([l, v]) => `<tr><td>${l}</td><td class="n">${fmt0(v)}</td><td class="n">${area ? fmt0(v / area) : "—"}</td></tr>`).join("")}<tr class="grp"><td>Всього</td><td class="n">${fmt0(tot)}</td><td class="n">${area ? fmt0(tot / area) : "—"}</td></tr></tbody></table></div>`;
@@ -3027,6 +3030,29 @@ function aoWaybillDialog(id){
     <div class="tw"><table><thead><tr><th>Поле</th><th class="n">Га</th><th class="n">Пальне (частка), л</th><th>Помічник</th></tr></thead><tbody>${fs.map(x => { const m = aoWbField(x); return `<tr><td>${m.f ? `<a href="#field-${esc(m.f.id)}">${esc(x.field)}</a>` : esc(x.field || "—")}</td><td class="n">${fmt(num(x.area))}</td><td class="n">${tot ? fmt(num(w.fuel) * num(x.area) / tot, 1) : "—"}</td><td>${esc(x.helper || "")}</td></tr>`; }).join("")}</tbody></table></div>
     <p class="note">Дані з АгроОбліку, лише для перегляду. Змінюйте їх в АгроОбліку.</p>` });
 }
+const AO_CAT_KEY = { "Насіння": "materials", "Добрива": "materials", "ЗЗР": "materials", "ПММ": "fuel", "Оренда землі (паї)": "rent", "Загальновиробничі": "overhead" };
+const AO_CATS = ["Насіння","Добрива","ЗЗР","ПММ","Оплата праці","Оренда землі (паї)","Ремонт техніки","Послуги сторонніх","Зберігання і доробка","Загальновиробничі","Інше"];
+function aoCostsFor(season){
+  const out = []; const bySeason = S.aocosts.filter(c => Number(c.season) === Number(season));
+  S.fields.filter(f => !f.archived).forEach(f => { const ks = aoKeys(f); const cs = bySeason.filter(c => ks.has(aoNorm(c.field)));
+    if(!cs.length) return; const m = { field: cs.map(c => c.field).join(", "), cats: {}, total: 0, area: 0, income: 0 };
+    cs.forEach(c => { Object.entries(c.cats || {}).forEach(([k, v]) => m.cats[k] = (m.cats[k] || 0) + num(v)); m.total += num(c.total); m.area += num(c.area); m.income += num(c.income); });
+    out.push({ f, c: m }); });
+  return out;
+}
+function aoStockHtml(limit){
+  const rows = S.aostock.filter(r => num(r.qty) !== 0 || num(r.value) !== 0);
+  if(!rows.length) return `<div class="empty"><b>Залишків з АгроОбліку ще немає</b>Вони з'являться, коли АгроОблік почне надсилати склад.</div>`;
+  const divs = [...new Set(rows.map(r => r.div || "—"))].sort(); const whs = [...new Set(rows.map(r => r.whName || r.wh || "—"))].sort();
+  const dv = state.aoStDiv || "", wv = state.aoStWh || "", q = (state.aoStQ || "").toLowerCase();
+  const R = rows.filter(r => (!dv || (r.div || "—") === dv) && (!wv || (r.whName || r.wh || "—") === wv) && (!q || String(r.itemName || "").toLowerCase().includes(q))).sort((a, b) => num(b.value) - num(a.value));
+  const low = R.filter(r => num(r.min) && num(r.qty) < num(r.min));
+  const list = limit ? R.slice(0, limit) : R;
+  const byWh = {}; R.forEach(r => { const k = r.whName || r.wh || "—"; byWh[k] = (byWh[k] || 0) + num(r.value); });
+  return `${limit ? "" : `<div class="filters"><select id="aoStDiv">${opt("", "Усі відділення", dv)}${divs.map(d => opt(d, d, dv)).join("")}</select><select id="aoStWh">${opt("", "Усі склади", wv)}${whs.map(w => opt(w, w, wv)).join("")}</select><input id="aoStQ" placeholder="Пошук матеріалу" value="${esc(state.aoStQ || "")}"></div>`}
+  <div class="kpis">${Object.entries(byWh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="kpi"><b>${fmt0(v)}</b><span>грн · ${esc(k)}</span></div>`).join("")}${low.length ? `<div class="kpi"><b style="color:var(--bad)">${low.length}</b><span>позицій нижче мінімуму</span></div>` : ""}</div>
+  <div class="tw"><table><thead><tr><th>Матеріал</th><th>Склад</th><th>Відділення</th><th class="n">Залишок</th><th class="n">Сер. ціна</th><th class="n">Сума, грн</th></tr></thead><tbody>${list.map(r => `<tr${num(r.min) && num(r.qty) < num(r.min) ? ' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"' : ""}><td>${esc(r.itemName || "")}</td><td>${esc(r.whName || r.wh || "")}</td><td>${esc(r.div || "")}</td><td class="n">${fmt(num(r.qty), 2)} ${esc(r.unit || "")}</td><td class="n">${r.avgPrice ? fmt(num(r.avgPrice), 2) : "—"}</td><td class="n">${fmt0(num(r.value))}</td></tr>`).join("")}</tbody></table></div>${limit && R.length > limit ? `<p class="note"><a href="#wms" data-wmstab="aostock">Усі залишки (${R.length}) →</a></p>` : ""}<p class="note">Дані з АгроОбліку, оновлюються автоматично.</p>`;
+}
 /* ---------- Telegram notifications ---------- */
 let TGI = null, TGCODE = null;
 async function loadTg(){ try { TGI = await api("/tg/info"); } catch(e){ TGI = { configured: false }; } render(); }
@@ -3069,7 +3095,11 @@ function seasonOf(date){ return Number((date || "").slice(0, 4)); }
 function computeEconomics(season){
   const fields = S.fields.filter(f => !f.archived && (fieldCrop(f, season) || S.ops.some(o => o.fieldId === f.id && Number(o.season) === season)));
   const R = {}; fields.forEach(f => R[f.id] = { f, crop: fieldCrop(f, season) || "Не вказана", area: num(f.area), materials: 0, matEst: 0, fuel: 0, rent: 0, direct: 0, overhead: 0, lines: [] });
-  const add = (fid, key, v, line) => { const r = R[fid]; if(!r || !v) return; r[key] += v; if(line) r.lines.push(Object.assign({ key, v }, line)); };
+  const aoF = new Set();
+  const add = (fid, key, v, line) => { const r = R[fid]; if(!r || !v) return; if(aoF.has(fid) && !(line && line.ao)) return; r[key] += v; if(line) r.lines.push(Object.assign({ key, v }, line)); };
+  // 0. ready-made field costs from АгроОблік (replace own sources for that field to avoid double counting)
+  aoCostsFor(season).forEach(({ f, c }) => { if(!R[f.id]) return; aoF.add(f.id); R[f.id].ao = c;
+    Object.entries(c.cats || {}).forEach(([cat, v]) => { v = num(v); if(!v) return; add(f.id, AO_CAT_KEY[cat] || "direct", v, { what: cat, src: "АгроОблік · " + (c.field || ""), ao: true }); }); });
   // 1. materials & fuel actually issued from the warehouse to a field (incl. fuel issued at stations)
   const { moves } = stockReplay("");
   const opsWithIssue = new Set();
@@ -3354,6 +3384,7 @@ main.addEventListener("click", e => {
 main.addEventListener("keydown", e => { if((e.key==="Enter"||e.key===" ") && e.target.dataset && e.target.dataset.rot){ e.preventDefault(); e.target.click(); } });
 main.addEventListener("input", e => {
   const id = e.target.id;
+  if(id==="aoStQ"){ state.aoStQ = e.target.value; render(); }
   if(id==="fq"){ state.fieldQ = e.target.value; render(); }
   if(id==="oq"){ state.ops.q = e.target.value; render(); }
   if(id==="mq"){ state.machQ = e.target.value; render(); }
@@ -3362,6 +3393,8 @@ main.addEventListener("input", e => {
 });
 main.addEventListener("change", e => {
   if(e.target.id === "aoSeason"){ state.aoSeason = e.target.value; render(); return; }
+  if(e.target.id === "aoStDiv"){ state.aoStDiv = e.target.value; render(); return; }
+  if(e.target.id === "aoStWh"){ state.aoStWh = e.target.value; render(); return; }
   if(e.target.dataset && e.target.dataset.aonames){ const f = byId("fields", e.target.dataset.aonames); if(f){ save("fields", Object.assign({}, f, { aoNames: e.target.value.trim() })).then(() => toast("Збережено")); } return; }
   const id = e.target.id;
   if(id==="fg"){ state.fieldGroup = e.target.value; state.mapVB.fields = null; delete state.mapVB.fields; render(); }
