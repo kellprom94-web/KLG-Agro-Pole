@@ -261,7 +261,7 @@ const UNITS = ["л","кг","т","шт","п.о."];
 const MACHINE_TYPES = {"Агро":["Трактор","Комбайн","Обприскувач","Сівалка","Навантажувач","Інше"],"Транспорт":["Вантажівка","Тягач","Самоскид","Бензовоз","Легкова","Інше"]};
 const SERVICE_KINDS = ["ТО-1","ТО-2","Сезонне ТО","Заміна мастила в двигуні","Заміна фільтрів","Ремонт","Шини","Інше"];
 const PEOPLE_ROLES = ["Водій","Механізатор","Агроном","Механік","Керівник","Інше"];
-const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs","aofields","aowaybills","aolzk","aoitems","aocosts","aostock"];
+const COLS = ["fields","ops","machines","implements","people","products","tasks","service","parcels","leases","owners","payments","settings","warehouses","whdocs","invoices","whrequests","pricelists","units","mplans","norms","fuelstations","fuelings","harvests","waybills","elevators","scoutreports","scouttasks","notes","plantthreats","agroplans","recommendations","costs","aofields","aowaybills","aolzk","aoitems","aocosts","aostock","aoplots"];
 
 /* ---------- state ---------- */
 const S = {}; COLS.forEach(c => S[c] = []);
@@ -451,8 +451,27 @@ function fieldsGeo(fields){
     geometry: { type: "MultiPolygon", coordinates: f.contours.map(r => [r]) } })) };
 }
 const PARCEL_COLORS = { "Взяті в оренду":"#34c759", "Взяті в суборенду":"#7ee08a", "Емфітевзис":"#64d2ff", "Власність":"#0a84ff", "Здані в оренду":"#bf5af2", "Здані в суборенду":"#d29bf5", "Сервітут":"#ac8e68", "Без типу":"#bdbdbd", "Закінчується":"#ff9f0a", "Закінчився":"#ff453a" };
+function aoPlotStatus(p){ const t = today(), e = p.end || ""; if(e && e < t) return ["end", "Договір закінчився", "#e53935"]; if(e && e <= addDaysIso(t, 180)) return ["soon", "Закінчується за 6 міс.", "#fb8c00"]; if(e || p.start) return ["ok", "Діючий договір", "#43a047"]; return ["no", "Без договору", "#9e9e9e"]; }
+function addDaysIso(d, n){ const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+function aoPlotRings(g){ try { const o = typeof g === "string" ? JSON.parse(g) : g; if(!o) return null; const geom = o.type === "Feature" ? o.geometry : o; if(!geom) return null;
+  if(geom.type === "Polygon") return [geom.coordinates[0]]; if(geom.type === "MultiPolygon") return geom.coordinates.map(pp => pp[0]); return null; } catch(e){ return null; } }
+let AOPLOTS_CACHE = { n: -1, v: [] };
+function aoPlotParcels(){
+  if(AOPLOTS_CACHE.n === S.aoplots.length && AOPLOTS_CACHE.src === S.aoplots) return AOPLOTS_CACHE.v;
+  const own = new Set(S.parcels.map(p => String(p.cadastre || "").trim()).filter(Boolean));
+  const v = S.aoplots.filter(p => !own.has(String(p.cad || "").trim())).map(p => ({ id: "ao_" + p.id, cadastre: p.cad || "", area: p.area, contours: aoPlotRings(p.geo), __ao: p })).filter(p => p.contours && p.contours.length);
+  AOPLOTS_CACHE = { n: S.aoplots.length, src: S.aoplots, v }; return v;
+}
+function aoPlotsOfField(f){ const ks = aoKeys(f); return aoPlotParcels().filter(p => p.__ao.field && ks.has(aoNorm(p.__ao.field))); }
+document.addEventListener("click", e => { const b = e.target.closest("[data-copycad]"); if(!b) return; const c = b.dataset.copycad; try { navigator.clipboard.writeText(c).then(() => toast("Номер скопійовано: " + c), () => toast(c)); } catch(err){ toast(c); } });
+function aoPlotDialog(id){
+  const p = S.aoplots.find(x => x.id === id); if(!p) return; const st = aoPlotStatus(p); const f = p.field ? S.fields.find(ff => aoKeys(ff).has(aoNorm(p.field))) : null;
+  openModal({ title: "Ділянка " + (p.cad || "без кадастрового номера"), saveLabel: null,
+    body: `<dl class="dl"><dt>Кадастровий номер</dt><dd>${esc(p.cad || "—")} ${p.cad ? `<button class="btn sm" type="button" data-copycad="${esc(p.cad)}">Скопіювати</button>` : ""}</dd><dt>Площа</dt><dd>${fmt(num(p.area), 4)} га</dd><dt>Власник (орендодавець)</dt><dd>${esc(p.owner || "—")}</dd><dt>Поле</dt><dd>${f ? `<a href="#field-${esc(f.id)}">${esc(f.name)}</a>` : esc(p.field || "—")}</dd><dt>Відділення</dt><dd>${esc(p.div || "—")}</dd><dt>Договір</dt><dd>${p.start ? fdate(p.start) : "—"} – ${p.end ? fdate(p.end) : "—"} · <span style="color:${st[2]}">${st[1]}</span></dd><dt>Оренда</dt><dd>${p.rent ? fmt0(num(p.rent)) + " грн/рік" : "—"}</dd></dl>
+      <p class="note">Дані з АгроОбліку, лише для перегляду. Знайти ділянку на kadastr.ua можна за скопійованим номером.</p>` });
+}
 function parcelsGeo(parcels){
-  return { type: "FeatureCollection", features: parcels.filter(p => p.contours && p.contours.length).map(p => { const st = parcelStatus(p);
+  return { type: "FeatureCollection", features: parcels.filter(p => p.contours && p.contours.length).map(p => { if(p.__ao){ const a = p.__ao, st = aoPlotStatus(a); return { type: "Feature", properties: { pid: p.id, cad: a.cad || "", status: st[1], color: st[2], area: num(a.area), owner: a.owner || "", council: a.field ? "Поле: " + a.field : "" }, geometry: { type: "MultiPolygon", coordinates: p.contours.map(r => [r]) } }; } const st = parcelStatus(p);
     return { type: "Feature", properties: { pid: p.id, cad: p.cadastre || "", status: st, color: PARCEL_COLORS[parcelColorKey(p)] || "#bdbdbd", area: num(p.area), owner: nameOf("owners", p.ownerId) || "", council: p.council || "" },
       geometry: { type: "MultiPolygon", coordinates: p.contours.map(r => [r]) } }; }) };
 }
@@ -592,7 +611,7 @@ function startDraw(key, onDone){
   updateMapData(M); M.el.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
-function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
+function pickParcel(pid){ if(String(pid).startsWith("ao_")) return aoPlotDialog(String(pid).slice(3)); const p = byId("parcels", pid); if(p) parcelDialog(p); }
 function pickField(fid){ if(state.view === "fieldpage"){ if(fid && fid !== state.fpId) location.hash = "field-" + fid; return; } openFieldTab(fid); }
 function fieldFiltRefit(){ if(state.mapVB) delete state.mapVB.fields; ["fields", "dash"].forEach(k => { if(MAPS[k]) MAPS[k].fitted = false; }); }
 function fpAllFields(M){ const own = (M.own || [])[0]; const rest = S.fields.filter(f => !f.archived && f.contours && f.contours.length && (!own || f.id !== own.id)); return own ? [own, ...rest] : rest; }
@@ -706,7 +725,7 @@ function viewDash(){
     <div class="kpi"><b style="color:${overdue.length?"var(--bad)":"inherit"}">${overdue.length}</b><span>прострочених ТО</span></div>
   </div>
   <div class="grid g2">
-    <div class="card"><h2>Карта полів · культури ${seasonLabel(state.season)}</h2><div class="filters">${fieldFilterSelects(fields)}</div>${mapHtml("dash", fieldMapFilter(fields))}${legend(fieldMapFilter(fields), true)}</div>
+    <div class="card"><h2>Карта полів · культури ${seasonLabel(state.season)}</h2><div class="filters">${fieldFilterSelects(fields)}</div>${mapHtml("dash", fieldMapFilter(fields), state.showPlots ? aoPlotParcels() : [])}${legend(fieldMapFilter(fields), true)}</div>
     <div class="card"><h2>Культури сезону ${seasonLabel(state.season)}</h2>
       ${rows.length ? `<div class="tw"><table><thead><tr><th>Культура</th><th class="n">Площа, га</th><th class="n">План, ц/га</th><th class="n">План, т</th><th class="n">Факт, ц/га</th><th class="n">Урожай, т</th></tr></thead><tbody>
       ${rows.map(([c,o]) => `<tr><td>${cropTag(c)}</td><td class="n">${fmt(o.area)}</td><td class="n">${o.planA?fmt(o.plan*10/o.planA):"—"}</td><td class="n">${o.plan?fmt0(o.plan):"—"}</td><td class="n">${o.factA?fmt(o.fact*10/o.factA):"—"}</td><td class="n">${o.fact?fmt0(o.fact):"—"}</td></tr>`).join("")}
@@ -726,7 +745,8 @@ function fieldFilterSelects(list){
   const crops = {}; list.filter(f => !state.fieldGroup || (f.group || "") === state.fieldGroup).forEach(f => { const c = fieldCrop(f) || "Не вказана"; crops[c] = (crops[c] || 0) + num(f.area); });
   const cs = Object.entries(crops).sort((a, b) => b[1] - a[1]);
   const any = state.fieldGroup || state.fieldCrop;
-  return `<select id="fg" aria-label="Відділення">${opt("", "Усі відділення", state.fieldGroup)}${groups.map(g => opt(g, g || "Без відділення", state.fieldGroup)).join("")}</select><select id="fcrop" aria-label="Культура">${opt("", "Усі культури", state.fieldCrop)}${cs.map(([c, a]) => opt(c, c + " · " + fmt0(a) + " га", state.fieldCrop)).join("")}${state.fieldCrop && !crops[state.fieldCrop] ? opt(state.fieldCrop, state.fieldCrop, state.fieldCrop) : ""}</select>${any ? `<button class="btn sm" type="button" data-act="fieldFiltReset">Скинути фільтр</button>` : ""}`;
+  const plotsBtn = S.aoplots.length ? `<button class="btn sm${state.showPlots ? " pri" : ""}" type="button" data-act="togglePlots">${state.showPlots ? "Сховати ділянки" : "Показати земельні ділянки"}</button>` : "";
+  return plotsBtn + `<select id="fg" aria-label="Відділення">${opt("", "Усі відділення", state.fieldGroup)}${groups.map(g => opt(g, g || "Без відділення", state.fieldGroup)).join("")}</select><select id="fcrop" aria-label="Культура">${opt("", "Усі культури", state.fieldCrop)}${cs.map(([c, a]) => opt(c, c + " · " + fmt0(a) + " га", state.fieldCrop)).join("")}${state.fieldCrop && !crops[state.fieldCrop] ? opt(state.fieldCrop, state.fieldCrop, state.fieldCrop) : ""}</select>${any ? `<button class="btn sm" type="button" data-act="fieldFiltReset">Скинути фільтр</button>` : ""}`;
 }
 function legend(fields, clickable){
   const set = {}; fields.forEach(f => { const c = fieldCrop(f) || "Не вказана"; set[c] = (set[c]||0) + num(f.area); });
@@ -761,7 +781,7 @@ function viewFields(){
       <p class="note">Разом: ${list.length} полів, ${fmt(sum(list,f=>f.area))} га.</p>
     </div>
     <div class="grid" style="align-content:start">
-      <div class="card"><h2>Карта · ${seasonLabel(state.season)}</h2>${mapHtml("fields", list)}${legend(list)}</div>
+      <div class="card"><h2>Карта · ${seasonLabel(state.season)}</h2>${mapHtml("fields", list, state.showPlots ? aoPlotParcels() : [])}${legend(list)}</div>
       ${sel ? fieldCard(sel) : `<div class="card"><div class="empty">Оберіть поле в таблиці або на карті, щоб побачити його картку.</div></div>`}
     </div>
   </div>`;
@@ -1288,7 +1308,7 @@ function landOverview(){
     <div class="kpi"><b>${fmt0(K.accrued)}</b><span>грн оренди за ${state.rentYear} · виплачено ${fmt0(K.paid)}</span></div>
   </div>
   <div class="grid g2">
-    <div class="card"><h2>Карта земельних ділянок</h2>${mapHtml("land", S.fields.filter(f => !f.archived), K.ps)}${parcelLegend(K.ps)}</div>
+    <div class="card"><h2>Карта земельних ділянок</h2>${mapHtml("land", S.fields.filter(f => !f.archived), [...K.ps, ...aoPlotParcels()])}${parcelLegend(K.ps)}${S.aoplots.length ? `<div class="legend"><b style="font-size:12px">Ділянки з АгроОбліку (${aoPlotParcels().length}):</b><span class="crop"><i class="dot" style="background:#43a047"></i>діючий договір</span><span class="crop"><i class="dot" style="background:#fb8c00"></i>закінчується за 6 міс.</span><span class="crop"><i class="dot" style="background:#e53935"></i>закінчився</span><span class="crop"><i class="dot" style="background:#9e9e9e"></i>без договору</span></div>` : ""}</div>
     <div class="grid" style="align-content:start">
       <div class="card"><h2>Договори, що закінчуються або закінчились</h2>${soon.length ? `<div class="tw"><table><thead><tr><th>Документ</th><th>Контрагент</th><th class="n">Га</th><th>До</th><th class="n">Днів</th></tr></thead><tbody>${soon.map(l => `<tr class="click" data-lease="${esc(l.id)}"><td>${esc(l.number || "#")}<div class="note">${esc(l.type || "")}</div></td><td>${esc(cpName(l.ownerId) || "—")}</td><td class="n">${fmt(docArea(l), 2)}</td><td>${fdate(docEnd(l))}</td><td class="n" style="color:${(daysLeft(l)??0)<0?"var(--bad)":"var(--warn)"}">${daysLeft(l)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Немає договорів, що закінчуються найближчим часом.</p>`}</div>
       <div class="card"><h2>Структура за сільськими радами, га</h2>${Object.keys(councils).length ? `<div class="tw"><table><thead><tr><th>Сільська рада</th><th class="n">Ділянок</th><th class="n">Площа</th><th class="n">Документи</th><th class="n">Власність</th><th class="n">Без док.</th><th class="n">НГО, грн</th></tr></thead><tbody>${Object.entries(councils).sort((a,b)=>b[1].area-a[1].area).map(([c,x]) => `<tr><td>${esc(c)}</td><td class="n">${x.n}</td><td class="n">${fmt(x.area,2)}</td><td class="n">${fmt(x.act,2)}</td><td class="n">${fmt(x.own,2)}</td><td class="n">${x.free?fmt(x.free,2):"—"}</td><td class="n">${x.ngo?fmt0(x.ngo):"—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="note">Додайте земельні ділянки або імпортуйте їх з Excel.</p>`}</div>
@@ -2839,7 +2859,7 @@ function fpSummaryHtml(f, s, parcels){
   const mid = `<div class="grid" style="align-content:start;gap:12px"><div class="card" id="fpNdviVal">${f.contours ? `<p class="note">Завантажую NDVI…</p>` : `<p class="note">Потрібен контур поля.</p>`}</div>
     <div class="card"><h2>Сума ефективних температур, °C</h2><div class="gdd" id="fpGdd"><p class="note">Завантажую…</p></div></div>
     <div class="card"><h2>Погода зараз</h2><div id="fpNow"><p class="note">${f.contours ? "Завантажую…" : "Потрібен контур поля."}</p></div></div></div>`;
-  const map = `<div class="card fpmapcard"><h2>Супутникові знімки</h2>${mapHtml("fieldpage", [f], parcels)}</div>`;
+  const map = `<div class="card fpmapcard"><h2>Супутникові знімки</h2>${mapHtml("fieldpage", [f], [...parcels, ...aoPlotsOfField(f)])}</div>`;
   const charts = `<div class="fpcharts"><div class="card"><h2>Вегетація (NDVI)</h2><div id="fpVeg"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Опади</h2><div id="fpRain"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Температура</h2><div id="fpTemp"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Вологість ґрунту, %</h2><div id="fpSoil"><p class="note">Завантажую…</p></div></div></div>`;
   const reports = `<div class="card"><h2>Останні звіти оглядів</h2>${rs.length ? rs.map(r => `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><a href="#" class="linkish" data-scout="${esc(r.id)}" style="font-size:15px;text-decoration:none">${fdate(r.date)}</a>${r.stage ? ` · <span class="muted">${esc(r.stage)}</span>` : ""}<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0" data-scoutphotos="${esc(r.id)}"></div>${(r.threats || []).length ? `<div class="note">${(r.threats || []).map(t => esc(nameOf("plantthreats", t.threatId) || "") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ")}</div>` : ""}${r.note ? `<div>${esc(r.note)}</div>` : ""}<div class="note">${esc(r.author || r.updatedBy || "")}</div></div>`).join("") : `<div class="empty">Оглядів ще немає. <button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button></div>`}</div>`;
   const aoCard = ao && (ao.wb.length || ao.lz.length) ? `<div class="card"><h2>З АгроОбліку · ${seasonLabel(state.season)}</h2>${(() => { const W = ao.wb.filter(r => Number(r.w.season) === state.season), Z = ao.lz.filter(r => Number(r.d.season) === state.season); return `<dl class="dl"><dt>Записів у шляхових листах</dt><dd>${W.length}</dd><dt>Оброблено</dt><dd>${fmt(sum(W, r => r.ha))} га</dd><dt>Пальне</dt><dd>${fmt0(sum(W, r => r.fuel))} л${num(f.area) ? " · " + fmt(sum(W, r => r.fuel) / num(f.area)) + " л/га" : ""}</dd><dt>Рядків списання (ЛЗК)</dt><dd>${Z.length}</dd></dl><button class="btn sm" type="button" data-fptab="agrooblik" style="margin-top:10px">Детальніше</button>`; })()}</div>` : "";
@@ -2917,7 +2937,7 @@ function viewFieldPage(){
   }
   if(T === "area"){
     const ring = (f.contours || [])[0] || [];
-    body = `<div class="grid g2"><div class="card"><h2>Контур</h2>${mapHtml("fieldpage", [f], parcels)}<div class="filters" style="margin-top:10px"><button class="btn" type="button" data-act="fpRedraw" data-id="${esc(f.id)}">${f.contours ? "Перемалювати все" : "Намалювати контур"}</button>${f.contours ? `<button class="btn" type="button" data-act="fpAddPart" data-id="${esc(f.id)}">+ Додати ще контур</button>` : ""}<button class="btn" type="button" data-act="fpTrack" data-id="${esc(f.id)}">📍 Записати GPS</button>${f.contours ? `<button class="btn" type="button" data-act="fpEdit" data-id="${esc(f.id)}">✎ Редагувати точки</button><button class="btn" type="button" data-act="fpOffset" data-id="${esc(f.id)}">↔ Відступ</button>` : ""}${f.contours ? `<button class="btn" type="button" data-act="fpGeo" data-id="${esc(f.id)}">Вивантажити GeoJSON</button><button class="btn" type="button" data-act="fpKml" data-id="${esc(f.id)}">Вивантажити KML</button>` : ""}</div></div>
+    body = `<div class="grid g2"><div class="card"><h2>Контур</h2>${mapHtml("fieldpage", [f], [...parcels, ...aoPlotsOfField(f)])}<div class="filters" style="margin-top:10px"><button class="btn" type="button" data-act="fpRedraw" data-id="${esc(f.id)}">${f.contours ? "Перемалювати все" : "Намалювати контур"}</button>${f.contours ? `<button class="btn" type="button" data-act="fpAddPart" data-id="${esc(f.id)}">+ Додати ще контур</button>` : ""}<button class="btn" type="button" data-act="fpTrack" data-id="${esc(f.id)}">📍 Записати GPS</button>${f.contours ? `<button class="btn" type="button" data-act="fpEdit" data-id="${esc(f.id)}">✎ Редагувати точки</button><button class="btn" type="button" data-act="fpOffset" data-id="${esc(f.id)}">↔ Відступ</button>` : ""}${f.contours ? `<button class="btn" type="button" data-act="fpGeo" data-id="${esc(f.id)}">Вивантажити GeoJSON</button><button class="btn" type="button" data-act="fpKml" data-id="${esc(f.id)}">Вивантажити KML</button>` : ""}</div></div>
       <div class="card">${(f.contours || []).length > 1 ? `<h2>Контури поля (${f.contours.length})</h2><div class="tw" style="margin-bottom:14px"><table><thead><tr><th>Контур</th><th class="n">Площа, га</th><th></th></tr></thead><tbody>${f.contours.map((r, i) => `<tr><td>Частина ${i + 1}</td><td class="n">${fmt(ringArea(r), 2)}</td><td style="text-align:right"><button class="btn sm danger" type="button" data-act="fpDelPart" data-id="${esc(f.id)}" data-i="${i}">Видалити</button></td></tr>`).join("")}</tbody></table></div>` : ""}<h2>Площа</h2><dl class="dl"><dt>Оброблювальна</dt><dd>${fmt(num(f.area))} га</dd><dt>Офіційна</dt><dd>${f.officialArea ? fmt(num(f.officialArea)) + " га" : "—"}</dd><dt>Розрахункова (за контуром)</dt><dd>${f.calcArea ? fmt(num(f.calcArea), 4) + " га" : "—"}</dd><dt>Периметр</dt><dd>${ring.length ? fmt(perimeterKm(ring), 2) + " км" : "—"}</dd><dt>Полігонів у контурі</dt><dd>${(f.contours||[]).length}</dd><dt>Точок у контурі</dt><dd>${sum(f.contours||[], r => r.length)}</dd>${fieldCenter(f) ? `<dt>Центр поля</dt><dd>${fieldCenter(f)[1].toFixed(5)}, ${fieldCenter(f)[0].toFixed(5)}</dd>` : ""}${f.cadastre ? `<dt>Кадастрові номери</dt><dd>${esc(f.cadastre)}</dd>` : ""}</dl></div></div>`;
   }
   if(T === "land"){
@@ -3483,7 +3503,7 @@ function setPeriod(k){
 }
 const main = document.getElementById("main");
 main.addEventListener("click", e => {
-  const t = e.target.closest("[data-cropf],[data-aowb],[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
+  const t = e.target.closest("[data-copycad],[data-cropf],[data-aowb],[data-econtab],[data-econfield],[data-cost],[data-fptab],[data-ndvidate],[data-user],[data-plantab],[data-agroplan],[data-rec],[data-scouttab],[data-scout],[data-scouttask],[data-note],[data-threat],[data-svctab],[data-mplan],[data-norm],[data-fueltab],[data-fueling],[data-station],[data-harvtab],[data-harv],[data-waybill],[data-elevator],[data-machine-open],[data-wmstab],[data-whdoc],[data-req],[data-invoice],[data-pricelist],[data-warehouse],[data-unit],[data-wmsrep],[data-stockitem],[data-field-open],[data-landtab],[data-parcel],[data-lease],[data-owner],[data-pay],[data-act],[data-field],[data-op],[data-machine],[data-task],[data-service],[data-product],[data-impl],[data-person],[data-rot],[data-reftab],[data-reptab],[data-per]");
   if(!t) return;
   const d = t.dataset;
   if(d.act){
@@ -3493,6 +3513,7 @@ main.addEventListener("click", e => {
     if(a==="import") return importDialog();
     if(a==="newField") return fieldDialog(null);
     if(a==="trackNew") return trackFieldDialog("");
+    if(a==="togglePlots"){ state.showPlots = !state.showPlots; render(); return; }
     if(a==="fieldFiltReset"){ state.fieldGroup = ""; state.fieldCrop = ""; fieldFiltRefit(); render(); return; }
     if(a==="drawField"){ toast("Клацайте по краях поля на карті"); return startDraw("fields", rings => fieldDialog(null, rings)); }
     if(a==="redraw"){ const fid = d.id; toast("Клацайте по краях поля на карті"); return startDraw("fields", async rings => { const f = byId("fields", fid); if(!f) return; const ca = +contourArea(rings).toFixed(2); await save("fields", Object.assign({}, f, { contours: rings, calcArea: ca, area: num(f.area) || ca })); toast("Контур збережено: " + fmt(ca) + " га"); }); }
