@@ -518,7 +518,7 @@ function createMap(key){
     <div class="drawbar" hidden><span></span><button type="button" data-dundo>Крок назад</button><button type="button" data-dcancel>Скасувати</button><button type="button" class="pri" data-ddone>Завершити</button></div>`;
   const M = { el, key, fields: [], parcels: [], fitted: false, draw: null, parcelsFirst: key === "land" };
   if(typeof maplibregl === "undefined"){ el.querySelector(".mapgl").innerHTML = `<div class="empty" style="color:#fff">Карта не завантажилась. Перевірте інтернет і оновіть сторінку.</div>`; M.map = { getSource(){ return null; }, resize(){} }; return M; }
-  const map = new maplibregl.Map({ container: el.querySelector(".mapgl"), style: STYLES[mapStyle], center: [30.43, 48.39], zoom: 10, attributionControl: { compact: true }, dragRotate: false });
+  const map = new maplibregl.Map({ container: el.querySelector(".mapgl"), style: STYLES[mapStyle], center: [30.43, 48.39], zoom: 10, attributionControl: { compact: true }, dragRotate: false, locale: { "GeolocateControl.FindMyLocation": "Де я зараз", "GeolocateControl.LocationNotAvailable": "Місцезнаходження недоступне", "NavigationControl.ZoomIn": "Наблизити", "NavigationControl.ZoomOut": "Віддалити" } });
   M.map = map;
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
