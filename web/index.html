@@ -498,7 +498,7 @@ function aoPlotShowOnMap(id){
   closeModalSafe(); if(location.hash !== "#land"){ location.hash = "#land"; setTimeout(go, 900); } else setTimeout(go, 50);
 }
 function closeModalSafe(){ try { if(typeof closeModal === "function") closeModal(); else document.querySelector(".modal-back,.modalbg,.overlay")?.remove(); } catch(e){} }
-document.addEventListener("click", e => { const l = e.target.closest("[data-aoplotlist]"); if(l){ aoPlotListDialog(l.dataset.aoplotlist); return; } const r = e.target.closest("[data-aoplot]"); if(r){ aoPlotDialog(r.dataset.aoplot); return; } const m = e.target.closest("[data-aoplotmap]"); if(m) aoPlotShowOnMap(m.dataset.aoplotmap); });
+document.addEventListener("click", e => { const g = e.target.closest("[data-aostgrp]"); if(g){ state.aoStGrp = g.dataset.aostgrp; render(); return; } const l = e.target.closest("[data-aoplotlist]"); if(l){ aoPlotListDialog(l.dataset.aoplotlist); return; } const r = e.target.closest("[data-aoplot]"); if(r){ aoPlotDialog(r.dataset.aoplot); return; } const m = e.target.closest("[data-aoplotmap]"); if(m) aoPlotShowOnMap(m.dataset.aoplotmap); });
 function aoPlotsOfField(f){ const ks = aoKeys(f); return aoPlotParcels().filter(p => p.__ao.field && ks.has(aoNorm(p.__ao.field))); }
 document.addEventListener("click", e => { const b = e.target.closest("[data-copycad]"); if(!b) return; const c = b.dataset.copycad; try { navigator.clipboard.writeText(c).then(() => toast("Номер скопійовано: " + c), () => toast(c)); } catch(err){ toast(c); } });
 function aoPlotDialog(id){
@@ -772,7 +772,7 @@ function viewDash(){
   </div>
   <div class="grid g2" style="margin-top:16px">
     <div class="card"><h2>Останні операції техніки</h2>${recentMachineOpsHtml(10)}</div>
-    ${S.aostock.length ? `<div class="card"><h2>Залишки складу · АгроОблік</h2>${aoStockHtml(8)}</div>` : ""}
+    <div class="card"><h2>Склад ЗЗР, насіння, добрива · АгроОблік</h2>${aoStockHtml(8, true)}</div>
     <div class="card"><h2>Прогрес агрооперацій ${seasonLabel(state.season)}</h2>${opsProgress(ops)}</div>
   </div>`;
 }
@@ -2775,7 +2775,7 @@ async function loadNdviStats(f){
   }).finally(() => { delete ndviPending[key]; });
 }
 const ndviPending = {}; let ndviActive = 0; const ndviQueue = [];
-function ndviSlot(fn){ return new Promise((ok, bad) => { const run = () => { ndviActive++; fn().then(ok, bad).finally(() => { ndviActive--; const n = ndviQueue.shift(); if(n) n(); }); }; if(ndviActive < 3) run(); else ndviQueue.push(run); }); }
+function ndviSlot(fn){ return new Promise((ok, bad) => { const run = () => { ndviActive++; fn().then(ok, bad).finally(() => { ndviActive--; const n = ndviQueue.shift(); if(n) n(); }); }; if(ndviActive < 4) run(); else ndviQueue.push(run); }); }
 function ndviColor(v){ return v < 0.2 ? "#c9a96a" : v < 0.35 ? "#e8d777" : v < 0.5 ? "#a6d65a" : v < 0.65 ? "#5fae3c" : "#1f7a21"; }
 function ndviChart(pts){
   if(!pts.length) return `<p class="note">За сезон немає безхмарних знімків цього поля.</p>`;
@@ -3150,18 +3150,29 @@ function aoCostsFor(season){
     out.push({ f, c: m }); });
   return out;
 }
-function aoStockHtml(limit){
-  const rows = S.aostock.filter(r => num(r.qty) !== 0 || num(r.value) !== 0);
-  if(!rows.length) return `<div class="empty"><b>Залишків з АгроОбліку ще немає</b>Вони з'являться, коли АгроОблік почне надсилати склад.</div>`;
+const AO_GRP = [["czr","ЗЗР"],["seed","Насіння"],["fert","Добрива"],["other","Інше"]];
+function aoStockGroup(r){
+  let w = String(r.wh || ""); if(!["czr","seed","fert"].includes(w)){ const it = S.aoitems.find(i => i.id === r.itemId); if(it && it.wh) w = it.wh; }
+  if(["czr","seed","fert"].includes(w)) return w;
+  const n = String(r.whName || "").toLowerCase();
+  if(/ззр|засоб|хім|czr/.test(n)) return "czr"; if(/насін|seed/.test(n)) return "seed"; if(/добр|fert/.test(n)) return "fert"; return "other";
+}
+function aoStockHtml(limit, agroOnly){
+  const rows0 = S.aostock.filter(r => num(r.qty) !== 0 || num(r.value) !== 0);
+  if(!rows0.length) return `<div class="empty"><b>Залишків з АгроОбліку ще немає</b>Вони з'являться, коли АгроОблік почне надсилати склад (колекція stock).</div>`;
+  const gv = state.aoStGrp || "";
+  const gsum = {}; rows0.forEach(r => { const g = aoStockGroup(r); const x = gsum[g] ||= { n: 0, v: 0 }; x.n++; x.v += num(r.value); });
+  const grpBar = `<div class="kpis">${AO_GRP.filter(([k]) => k !== "other" || (!agroOnly && gsum.other)).map(([k, l]) => `<div class="kpi click" data-aostgrp="${gv === k ? "" : k}" title="Показати ${esc(l)}" style="${gv === k ? "box-shadow:0 0 0 2px var(--accent) inset" : ""}"><b>${fmt0((gsum[k] || {}).v || 0)}</b><span>грн · ${esc(l)} · ${(gsum[k] || {}).n || 0} поз.</span></div>`).join("")}</div>`;
+  const rows = rows0.filter(r => { const g = aoStockGroup(r); if(gv) return g === gv; return agroOnly ? g !== "other" : true; });
   const divs = [...new Set(rows.map(r => r.div || "—"))].sort(); const whs = [...new Set(rows.map(r => r.whName || r.wh || "—"))].sort();
   const dv = state.aoStDiv || "", wv = state.aoStWh || "", q = (state.aoStQ || "").toLowerCase();
   const R = rows.filter(r => (!dv || (r.div || "—") === dv) && (!wv || (r.whName || r.wh || "—") === wv) && (!q || String(r.itemName || "").toLowerCase().includes(q))).sort((a, b) => num(b.value) - num(a.value));
   const low = R.filter(r => num(r.min) && num(r.qty) < num(r.min));
   const list = limit ? R.slice(0, limit) : R;
   const byWh = {}; R.forEach(r => { const k = r.whName || r.wh || "—"; byWh[k] = (byWh[k] || 0) + num(r.value); });
-  return `${limit ? "" : `<div class="filters"><select id="aoStDiv">${opt("", "Усі відділення", dv)}${divs.map(d => opt(d, d, dv)).join("")}</select><select id="aoStWh">${opt("", "Усі склади", wv)}${whs.map(w => opt(w, w, wv)).join("")}</select><input id="aoStQ" placeholder="Пошук матеріалу" value="${esc(state.aoStQ || "")}"></div>`}
-  <div class="kpis">${Object.entries(byWh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="kpi"><b>${fmt0(v)}</b><span>грн · ${esc(k)}</span></div>`).join("")}${low.length ? `<div class="kpi"><b style="color:var(--bad)">${low.length}</b><span>позицій нижче мінімуму</span></div>` : ""}</div>
-  <div class="tw"><table><thead><tr><th>Матеріал</th><th>Склад</th><th>Відділення</th><th class="n">Залишок</th><th class="n">Сер. ціна</th><th class="n">Сума, грн</th></tr></thead><tbody>${list.map(r => `<tr${num(r.min) && num(r.qty) < num(r.min) ? ' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"' : ""}><td>${esc(r.itemName || "")}</td><td>${esc(r.whName || r.wh || "")}</td><td>${esc(r.div || "")}</td><td class="n">${fmt(num(r.qty), 2)} ${esc(r.unit || "")}</td><td class="n">${r.avgPrice ? fmt(num(r.avgPrice), 2) : "—"}</td><td class="n">${fmt0(num(r.value))}</td></tr>`).join("")}</tbody></table></div>${limit && R.length > limit ? `<p class="note"><a href="#wms" data-wmstab="aostock">Усі залишки (${R.length}) →</a></p>` : ""}<p class="note">Дані з АгроОбліку, оновлюються автоматично.</p>`;
+  return grpBar + `${limit ? "" : `<div class="filters"><select id="aoStDiv">${opt("", "Усі відділення", dv)}${divs.map(d => opt(d, d, dv)).join("")}</select><select id="aoStWh">${opt("", "Усі склади", wv)}${whs.map(w => opt(w, w, wv)).join("")}</select><input id="aoStQ" placeholder="Пошук матеріалу" value="${esc(state.aoStQ || "")}"></div>`}
+  ${low.length ? `<p class="note" style="color:var(--bad)">Позицій нижче мінімуму: ${low.length} (виділено червоним).</p>` : ""}
+  <div class="tw"><table><thead><tr><th>Матеріал</th><th>Склад</th><th>Відділення</th><th class="n">Залишок</th><th class="n">Сер. ціна</th><th class="n">Сума, грн</th></tr></thead><tbody>${list.map(r => `<tr${num(r.min) && num(r.qty) < num(r.min) ? ' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"' : ""}><td>${esc(r.itemName || "")}</td><td>${esc(r.whName || r.wh || "")}</td><td>${esc(r.div || "")}</td><td class="n">${fmt(num(r.qty), 2)} ${esc(r.unit || "")}</td><td class="n">${r.avgPrice ? fmt(num(r.avgPrice), 2) : "—"}</td><td class="n">${fmt0(num(r.value))}</td></tr>`).join("")}</tbody></table></div>${limit && R.length > limit ? `<p class="note"><a href="#wms" data-wmstab="aostock">Усі позиції (${R.length}) →</a></p>` : ""}<p class="note">Дані з АгроОбліку, оновлюються автоматично.</p>`;
 }
 function inRing(p, r){ let c = false; for(let i = 0, j = r.length - 1; i < r.length; j = i++){ const [xi, yi] = r[i], [xj, yj] = r[j]; if(((yi > p[1]) !== (yj > p[1])) && (p[0] < (xj - xi) * (p[1] - yi) / ((yj - yi) || 1e-12) + xi)) c = !c; } return c; }
 function fieldAt(p){ return S.fields.find(f => !f.archived && (f.contours || []).some(r => inRing(p, r))) || null; }
