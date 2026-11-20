@@ -2762,11 +2762,20 @@ function ndviRange(){ const s = state.season; const end = s + "-12-31"; return {
 async function loadNdviStats(f){
   const r = ndviRange(); const key = f.id + "|" + r.from + "|" + r.to + "|" + JSON.stringify(f.contours).length;
   if(ndviCache[key]) return ndviCache[key];
-  const res = await fetch("/api/ndvi/stats", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.assign({ geometry: fieldGeom(f) }, r)) });
-  if(res.status === 503) return { notConfigured: true };
-  if(!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
-  return ndviCache[key] = await res.json();
+  if(ndviPending[key]) return ndviPending[key];
+  return ndviPending[key] = ndviSlot(async () => {
+    const body = JSON.stringify(Object.assign({ geometry: fieldGeom(f) }, r));
+    for(let attempt = 0; ; attempt++){
+      const res = await fetch("/api/ndvi/stats", { method: "POST", headers: { "content-type": "application/json" }, body });
+      if(res.status === 503) return { notConfigured: true };
+      if(res.ok) return ndviCache[key] = await res.json();
+      if(attempt < 3 && [429, 500, 502, 504].includes(res.status)){ await new Promise(ok => setTimeout(ok, 1500 * (attempt + 1) + Math.random() * 1000)); continue; }
+      throw new Error((await res.json().catch(() => ({}))).error || res.status);
+    }
+  }).finally(() => { delete ndviPending[key]; });
 }
+const ndviPending = {}; let ndviActive = 0; const ndviQueue = [];
+function ndviSlot(fn){ return new Promise((ok, bad) => { const run = () => { ndviActive++; fn().then(ok, bad).finally(() => { ndviActive--; const n = ndviQueue.shift(); if(n) n(); }); }; if(ndviActive < 3) run(); else ndviQueue.push(run); }); }
 function ndviColor(v){ return v < 0.2 ? "#c9a96a" : v < 0.35 ? "#e8d777" : v < 0.5 ? "#a6d65a" : v < 0.65 ? "#5fae3c" : "#1f7a21"; }
 function ndviChart(pts){
   if(!pts.length) return `<p class="note">За сезон немає безхмарних знімків цього поля.</p>`;

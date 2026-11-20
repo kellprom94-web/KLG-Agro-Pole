@@ -279,12 +279,31 @@ async function handleApi(req, env, url) {
       const evalscript = `//VERSION=3
 function setup(){return{input:[{bands:["B04","B08","SCL","dataMask"]}],output:[{id:"ndvi",bands:1,sampleType:"FLOAT32"},{id:"dataMask",bands:1}]};}
 function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;const v=(s.B08-s.B04)/(s.B08+s.B04+1e-6);return{ndvi:[v],dataMask:[s.dataMask&&!bad?1:0]};}`;
-      const r = await shPost(["/statistics/v1", "/api/v1/statistics"], { input: { bounds, data: [{ type: "sentinel-2-l2a", dataFilter: { maxCloudCoverage: 70 } }] }, aggregation: { timeRange: { from: b.from + "T00:00:00Z", to: b.to + "T23:59:59Z" }, aggregationInterval: { of: "P1D" }, evalscript, resx: 0.0001, resy: 0.0001 }, calculations: { default: {} } });
-      if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
-      const j = await r.json();
-      if (b.debug) return json({ raw: JSON.stringify(j).slice(0, 3000) });
-      const raw = (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {};
+      const statsFor = async (geom) => {
+        const r = await shPost(["/statistics/v1", "/api/v1/statistics"], { input: { bounds: { geometry: geom, properties: bounds.properties }, data: [{ type: "sentinel-2-l2a", dataFilter: { maxCloudCoverage: 70 } }] }, aggregation: { timeRange: { from: b.from + "T00:00:00Z", to: b.to + "T23:59:59Z" }, aggregationInterval: { of: "P1D" }, evalscript, resx: 0.0001, resy: 0.0001 }, calculations: { default: {} } });
+        return r;
+      };
+      const parse = (j) => (j.data || []).map((d) => { const st = (((d.outputs || {}).ndvi || {}).bands || {}).B0 || {}; const s2 = st.stats || {};
         return { date: (d.interval || {}).from ? d.interval.from.slice(0, 10) : "", mean: s2.mean, min: s2.min, max: s2.max, total: s2.sampleCount || 0, nd: s2.noDataCount || 0 }; }).filter((x) => x.date && Number.isFinite(x.mean));
+      let r = await statsFor(g);
+      if (r && r.status === 429) { await new Promise((ok) => setTimeout(ok, 1500)); r = await statsFor(g); }
+      let raw;
+      if (r && r.status === 400 && g.type === "MultiPolygon" && g.coordinates.length > 1) {
+        // Parts of the field overlap or touch — CDSE rejects such MultiPolygon. Count each part separately and merge by date.
+        const by = {};
+        for (const poly of g.coordinates) {
+          let rp = await statsFor({ type: "Polygon", coordinates: poly });
+          if (rp && rp.status === 429) { await new Promise((ok) => setTimeout(ok, 1500)); rp = await statsFor({ type: "Polygon", coordinates: poly }); }
+          if (!rp || !rp.ok) continue;
+          for (const x of parse(await rp.json())) { const v = x.total - x.nd; const a = by[x.date] ||= { date: x.date, sum: 0, w: 0, min: Infinity, max: -Infinity, total: 0, nd: 0 }; a.sum += x.mean * v; a.w += v; a.min = Math.min(a.min, x.min); a.max = Math.max(a.max, x.max); a.total += x.total; a.nd += x.nd; }
+        }
+        raw = Object.values(by).filter((a) => a.w > 0).sort((a, c) => a.date.localeCompare(c.date)).map((a) => ({ date: a.date, mean: a.sum / a.w, min: a.min, max: a.max, total: a.total, nd: a.nd }));
+      } else {
+        if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, r && r.status === 429 ? 429 : 502);
+        const j = await r.json();
+        if (b.debug) return json({ raw: JSON.stringify(j).slice(0, 3000) });
+        raw = parse(j);
+      }
       const minNd = raw.length ? Math.min(...raw.map((x) => x.nd)) : 0;
       const pts = raw.map((x) => ({ date: x.date, mean: x.mean, min: x.min, max: x.max, p: x.total - minNd > 0 ? (x.total - x.nd) / (x.total - minNd) : 0 })).filter((x) => x.p >= 0.6);
       resp = json({ points: pts });
@@ -296,7 +315,12 @@ function setup(){return{input:[{bands:["B04","B08","SCL","dataMask"]}],output:{b
 const ramp=[[-1,[0.55,0.35,0.2]],[0,[0.75,0.6,0.4]],[0.2,[0.93,0.86,0.45]],[0.35,[0.75,0.87,0.35]],[0.5,[0.45,0.75,0.25]],[0.65,[0.2,0.6,0.15]],[0.8,[0.05,0.4,0.08]]];
 function col(v){for(let i=ramp.length-1;i>=0;i--){if(v>=ramp[i][0]){if(i==ramp.length-1)return ramp[i][1];const a=ramp[i],b=ramp[i+1],t=(v-a[0])/(b[0]-a[0]);return [0,1,2].map(k=>a[1][k]+(b[1][k]-a[1][k])*t);}}return ramp[0][1];}
 function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.dataMask)return[0,0,0,0];if(bad)return[0.85,0.85,0.85,0.75];const v=(s.B08-s.B04)/(s.B08+s.B04+1e-6);const c=col(v);return[c[0],c[1],c[2],1];}`;
-      const r = await shPost(["/process/v1", "/api/v1/process"], { input: { bounds, data: [{ type: "sentinel-2-l2a", dataFilter: { timeRange: { from: b.date + "T00:00:00Z", to: b.date + "T23:59:59Z" }, mosaickingOrder: "leastCC" } }] }, output: { width: w, height: h, responses: [{ identifier: "default", format: { type: "image/png" } }] }, evalscript });
+      const procBody = (bd) => ({ input: { bounds: bd, data: [{ type: "sentinel-2-l2a", dataFilter: { timeRange: { from: b.date + "T00:00:00Z", to: b.date + "T23:59:59Z" }, mosaickingOrder: "leastCC" } }] }, output: { width: w, height: h, responses: [{ identifier: "default", format: { type: "image/png" } }] }, evalscript });
+      let r = await shPost(["/process/v1", "/api/v1/process"], procBody(bounds));
+      if (r && r.status === 400 && g.type === "MultiPolygon") {
+        let bb = null; g.coordinates.forEach((pl) => pl[0].forEach(([x, y]) => { bb = bb ? [Math.min(bb[0], x), Math.min(bb[1], y), Math.max(bb[2], x), Math.max(bb[3], y)] : [x, y, x, y]; }));
+        r = await shPost(["/process/v1", "/api/v1/process"], procBody({ bbox: bb, properties: bounds.properties }));
+      }
       if (!r || !r.ok) return json({ error: "cdse " + (r ? r.status : "no response"), detail: r ? (await r.text()).slice(0, 300) : "" }, 502);
       resp = new Response(await r.arrayBuffer(), { headers: { "content-type": "image/png" } });
     }
