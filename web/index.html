@@ -77,6 +77,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;background:#f5f7f8;position
 td.n,th.n{text-align:right;white-space:nowrap}
 tr.click{cursor:pointer}
 tr.click:hover td{background:var(--accent-soft)}
+.kpi.click{cursor:pointer;transition:box-shadow .15s}.kpi.click:hover{box-shadow:0 0 0 2px var(--accent) inset}
 tr.grp td{background:color-mix(in srgb,var(--paper) 70%,var(--surface));font-weight:600}
 tr.sub td{font-weight:600;color:var(--muted);background:color-mix(in srgb,var(--paper) 35%,var(--surface))}
 tr:last-child td{border-bottom:0}
@@ -467,21 +468,44 @@ function aoPlotKpis(){
   const g = { ok:[0,0], soon:[0,0], end:[0,0], no:[0,0] }; let area = 0, rent = 0, geo = 0;
   P.forEach(p => { const k = aoPlotStatus(p)[0]; g[k][0]++; g[k][1] += num(p.area); area += num(p.area); if(k !== "end") rent += num(p.rent); if(aoPlotRings(p.geo)) geo++; });
   return `<h3 style="margin:14px 0 6px;font-size:14px">Ділянки з АгроОбліку</h3><div class="kpis">
-    <div class="kpi"><b>${P.length}</b><span>ділянок · ${fmt(area, 2)} га · з контуром ${geo}</span></div>
-    <div class="kpi"><b>${fmt(g.ok[1], 2)}</b><span>га з діючими договорами (${g.ok[0]})</span></div>
-    <div class="kpi"><b style="color:${g.soon[0]?"var(--warn)":"inherit"}">${g.soon[0]}</b><span>закінчуються за 6 міс. · ${fmt(g.soon[1], 2)} га</span></div>
-    <div class="kpi"><b style="color:${g.end[0]?"var(--bad)":"inherit"}">${g.end[0]}</b><span>договір закінчився · ${fmt(g.end[1], 2)} га</span></div>
-    <div class="kpi"><b>${g.no[0]}</b><span>без договору · ${fmt(g.no[1], 2)} га</span></div>
+    <div class="kpi click" data-aoplotlist="all" title="Відкрити перелік"><b>${P.length}</b><span>ділянок · ${fmt(area, 2)} га · з контуром ${geo}</span></div>
+    <div class="kpi click" data-aoplotlist="ok" title="Відкрити перелік"><b>${fmt(g.ok[1], 2)}</b><span>га з діючими договорами (${g.ok[0]})</span></div>
+    <div class="kpi click" data-aoplotlist="soon" title="Відкрити перелік"><b style="color:${g.soon[0]?"var(--warn)":"inherit"}">${g.soon[0]}</b><span>закінчуються за 6 міс. · ${fmt(g.soon[1], 2)} га</span></div>
+    <div class="kpi click" data-aoplotlist="end" title="Відкрити перелік"><b style="color:${g.end[0]?"var(--bad)":"inherit"}">${g.end[0]}</b><span>договір закінчився · ${fmt(g.end[1], 2)} га</span></div>
+    <div class="kpi click" data-aoplotlist="no" title="Відкрити перелік"><b>${g.no[0]}</b><span>без договору · ${fmt(g.no[1], 2)} га</span></div>
     <div class="kpi"><b>${fmt0(rent)}</b><span>грн орендної плати на рік</span></div>
-  </div>`;
+  </div>${aoExpiringCard()}`;
 }
+const AO_LIST_TITLES = { all: "Усі ділянки з АгроОбліку", ok: "Ділянки з діючими договорами", soon: "Договори, що закінчуються за 6 місяців", end: "Договори, що закінчились", no: "Ділянки без договору" };
+function aoPlotRowsHtml(list){
+  if(!list.length) return `<p class="muted">Немає ділянок.</p>`;
+  return `<div class="tw"><table><thead><tr><th>Кадастровий номер</th><th>Поле</th><th>Власник</th><th class="num">Площа, га</th><th>Закінчення договору</th><th class="num">Днів</th><th>Статус</th></tr></thead><tbody>${list.map(p => { const st = aoPlotStatus(p); const d = p.end ? Math.round((new Date(p.end + "T00:00:00Z") - new Date(today() + "T00:00:00Z")) / 864e5) : null;
+    return `<tr class="click" data-aoplot="${esc(p.id)}" title="Відкрити ділянку"><td><a href="javascript:void 0">${esc(p.cad || "без номера")}</a></td><td>${esc(p.field || "—")}</td><td>${esc(p.owner || "—")}</td><td class="num">${fmt(num(p.area), 4)}</td><td>${p.end ? fdate(p.end) : "—"}</td><td class="num" style="color:${st[2]}">${d == null ? "—" : d}</td><td><span style="color:${st[2]}">● ${esc(st[1])}</span></td></tr>`; }).join("")}</tbody></table></div>`;
+}
+function aoPlotsByKind(kind){ return S.aoplots.filter(p => kind === "all" || aoPlotStatus(p)[0] === kind).sort((a, b) => String(a.end || "9999").localeCompare(String(b.end || "9999")) || String(a.cad || "").localeCompare(String(b.cad || ""))); }
+function aoExpiringCard(){
+  const list = [...aoPlotsByKind("end"), ...aoPlotsByKind("soon")];
+  if(!list.length) return "";
+  return `<div class="card" style="margin-top:12px"><h2>Договори оренди: закінчуються та закінчились (${list.length})</h2>${aoPlotRowsHtml(list)}<p class="note">Натисніть рядок, щоб відкрити ділянку.</p></div>`;
+}
+function aoPlotListDialog(kind){
+  const list = aoPlotsByKind(kind);
+  openModal({ title: (AO_LIST_TITLES[kind] || "Ділянки") + " · " + list.length, wide: true, saveLabel: null, body: aoPlotRowsHtml(list) });
+}
+function aoPlotShowOnMap(id){
+  const p = aoPlotParcels().find(x => x.id === "ao_" + id); if(!p) return toast("У ділянки немає контуру");
+  const go = () => { const M = MAPS.land; if(!M || !M.map) return; let b = null; p.contours.forEach(r => r.forEach(([x, y]) => { b = b ? [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)] : [x, y, x, y]; })); M.map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 80, maxZoom: 17 }); M.el.scrollIntoView({ behavior: "smooth", block: "center" }); };
+  closeModalSafe(); if(location.hash !== "#land"){ location.hash = "#land"; setTimeout(go, 900); } else setTimeout(go, 50);
+}
+function closeModalSafe(){ try { if(typeof closeModal === "function") closeModal(); else document.querySelector(".modal-back,.modalbg,.overlay")?.remove(); } catch(e){} }
+document.addEventListener("click", e => { const l = e.target.closest("[data-aoplotlist]"); if(l){ aoPlotListDialog(l.dataset.aoplotlist); return; } const r = e.target.closest("[data-aoplot]"); if(r){ aoPlotDialog(r.dataset.aoplot); return; } const m = e.target.closest("[data-aoplotmap]"); if(m) aoPlotShowOnMap(m.dataset.aoplotmap); });
 function aoPlotsOfField(f){ const ks = aoKeys(f); return aoPlotParcels().filter(p => p.__ao.field && ks.has(aoNorm(p.__ao.field))); }
 document.addEventListener("click", e => { const b = e.target.closest("[data-copycad]"); if(!b) return; const c = b.dataset.copycad; try { navigator.clipboard.writeText(c).then(() => toast("Номер скопійовано: " + c), () => toast(c)); } catch(err){ toast(c); } });
 function aoPlotDialog(id){
   const p = S.aoplots.find(x => x.id === id); if(!p) return; const st = aoPlotStatus(p); const f = p.field ? S.fields.find(ff => aoKeys(ff).has(aoNorm(p.field))) : null;
   openModal({ title: "Ділянка " + (p.cad || "без кадастрового номера"), saveLabel: null,
     body: `<dl class="dl"><dt>Кадастровий номер</dt><dd>${esc(p.cad || "—")} ${p.cad ? `<button class="btn sm" type="button" data-copycad="${esc(p.cad)}">Скопіювати</button>` : ""}</dd><dt>Площа</dt><dd>${fmt(num(p.area), 4)} га</dd><dt>Власник (орендодавець)</dt><dd>${esc(p.owner || "—")}</dd><dt>Поле</dt><dd>${f ? `<a href="#field-${esc(f.id)}">${esc(f.name)}</a>` : esc(p.field || "—")}</dd><dt>Відділення</dt><dd>${esc(p.div || "—")}</dd><dt>Договір</dt><dd>${p.start ? fdate(p.start) : "—"} – ${p.end ? fdate(p.end) : "—"} · <span style="color:${st[2]}">${st[1]}</span></dd><dt>Оренда</dt><dd>${p.rent ? fmt0(num(p.rent)) + " грн/рік" : "—"}</dd></dl>
-      <p class="note">Дані з АгроОбліку, лише для перегляду. Знайти ділянку на kadastr.ua можна за скопійованим номером.</p>` });
+      ${aoPlotParcels().some(x => x.id === "ao_" + p.id) ? `<p><button class="btn" type="button" data-aoplotmap="${esc(p.id)}">Показати на карті</button></p>` : ""}<p class="note">Дані з АгроОбліку, лише для перегляду. Знайти ділянку на kadastr.ua можна за скопійованим номером.</p>` });
 }
 function parcelsGeo(parcels){
   return { type: "FeatureCollection", features: parcels.filter(p => p.contours && p.contours.length).map(p => { if(p.__ao){ const a = p.__ao, st = aoPlotStatus(a); return { type: "Feature", properties: { pid: p.id, cad: a.cad || "", status: st[1], color: st[2], area: num(a.area), owner: a.owner || "", council: a.field ? "Поле: " + a.field : "" }, geometry: { type: "MultiPolygon", coordinates: p.contours.map(r => [r]) } }; } const st = parcelStatus(p);
