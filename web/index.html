@@ -2973,7 +2973,7 @@ async function fpTimelineFill(f){
   if(f.contours){
     loadNdviStats(f).then(j => { (j.points || []).forEach(p => E.push({ t: "ndvi", d: p.date, title: "", html: `Знімок Sentinel-2 · NDVI <b style="color:${ndviColor(p.mean)}">${p.mean.toFixed(2)}</b> <span class="muted">(${p.min.toFixed(2)}–${p.max.toFixed(2)})</span>`, sub: "Натисніть, щоб відкрити знімок на карті поля", attr: `data-tlndvi="${esc(p.date)}"` })); if(document.getElementById("fpTl") === box) draw(); }).catch(() => {});
     loadFieldWx(f).then(d => { const sr = d && d.series; if(!sr) return; sr.date.forEach((dt, i) => { if(dt < from) return; const p = num(sr.precip[i]), tn = sr.tmin[i], tx = sr.tmax[i];
-        if(p >= 10) E.push({ t: "wx", d: dt, title: (p >= 25 ? "Сильна злива" : "Значні опади") + " · " + fmt(p, 1) + " мм" });
+        if(p >= 15) E.push({ t: "wx", d: dt, title: (p >= 25 ? "Сильна злива" : "Значні опади") + " · " + fmt(p, 1) + " мм" });
         if(tn != null && tn <= -3 && dt.slice(5, 7) >= "03" && dt.slice(5, 7) <= "05") E.push({ t: "wx", d: dt, title: "Весняний заморозок · " + fmt(tn, 1) + " °C" });
         else if(tn != null && tn <= -15) E.push({ t: "wx", d: dt, title: "Сильний мороз · " + fmt(tn, 1) + " °C" });
         if(tx != null && tx >= 35) E.push({ t: "wx", d: dt, title: "Спека · " + fmt(tx, 1) + " °C" }); });
