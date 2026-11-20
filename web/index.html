@@ -175,6 +175,8 @@ tr:last-child td{border-bottom:0}
 .trkhead{display:flex;gap:10px;align-items:baseline;margin-bottom:6px}.trkhead b{color:var(--bad)}
 .trkbody{display:flex;gap:12px;align-items:center}.trksvg{flex:none;width:120px;min-height:80px;background:var(--paper);border-radius:6px;display:grid;place-items:center}
 .trkbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.trkbtns .btn{min-height:44px}
+.herebox{position:absolute;left:10px;bottom:34px;z-index:3;background:var(--surface);color:var(--ink);border-radius:6px;padding:6px 10px;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3);max-width:calc(100% - 20px)}
+.maplibregl-user-location-dot,.maplibregl-user-location-dot:before{background-color:#1e88e5}
 @media (max-width:900px){
   .fpside{position:static;flex:1 1 100%}.fpside nav{flex-direction:row;overflow-x:auto}.fpside nav a{white-space:nowrap}.fpthumb{display:none}
   .fprow1,.fpcharts{grid-template-columns:1fr}
@@ -512,6 +514,7 @@ function createMap(key){
   el.innerHTML = `<div class="mapgl"></div>
     <div class="mtools"><button type="button" data-ms="sat">Супутник</button><button type="button" data-ms="map">Схема</button><button type="button" data-fit>Усі поля</button><button type="button" data-kad title="Публічна кадастрова карта України" hidden>Кадастр</button></div>
     <div class="mapnote">Контурів полів ще немає. Намалюйте поле на карті або імпортуйте KML/GeoJSON у розділі «Поля і карта».</div>
+    <div class="herebox" hidden></div>
     <div class="drawbar" hidden><span></span><button type="button" data-dundo>Крок назад</button><button type="button" data-dcancel>Скасувати</button><button type="button" class="pri" data-ddone>Завершити</button></div>`;
   const M = { el, key, fields: [], parcels: [], fitted: false, draw: null, parcelsFirst: key === "land" };
   if(typeof maplibregl === "undefined"){ el.querySelector(".mapgl").innerHTML = `<div class="empty" style="color:#fff">Карта не завантажилась. Перевірте інтернет і оновіть сторінку.</div>`; M.map = { getSource(){ return null; }, resize(){} }; return M; }
@@ -519,6 +522,15 @@ function createMap(key){
   M.map = map;
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+  if(navigator.geolocation){
+    const geo = new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: true, timeout: 20000 }, trackUserLocation: true, showAccuracyCircle: true, showUserLocation: true, fitBoundsOptions: { maxZoom: 16 } });
+    map.addControl(geo, "top-right"); M.geo = geo; let lastFid = null;
+    geo.on("geolocate", e => { const p = [e.coords.longitude, e.coords.latitude]; const f = fieldAt(p); const id = f ? f.id : "";
+      if(id !== lastFid){ lastFid = id; if(f) toast(`Ви на полі «${f.name}» · ±${Math.round(e.coords.accuracy)} м`); else if(lastFid !== null) toast(`Поза полями · ±${Math.round(e.coords.accuracy)} м`); }
+      M.here = { p, acc: e.coords.accuracy, fid: id }; const hb = M.el.querySelector(".herebox"); if(hb){ hb.hidden = false; hb.innerHTML = f ? `📍 <b>${esc(f.name)}</b> · ${fmt(num(f.area))} га · <a href="#field-${esc(f.id)}">відкрити</a>` : `📍 Поза полями · ±${Math.round(e.coords.accuracy)} м`; } });
+    geo.on("error", e => toast(e.code === 1 ? "Дозвольте доступ до місцезнаходження в налаштуваннях браузера" : "Не вдалося визначити місцезнаходження"));
+    geo.on("trackuserlocationend", () => { const hb = M.el.querySelector(".herebox"); if(hb) hb.hidden = true; });
+  }
   map.on("style.load", () => { addLayers(M); updateMapData(M); });
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
   map.on("mousemove", "f-fill", e => {
@@ -3066,6 +3078,8 @@ function aoStockHtml(limit){
   <div class="kpis">${Object.entries(byWh).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="kpi"><b>${fmt0(v)}</b><span>грн · ${esc(k)}</span></div>`).join("")}${low.length ? `<div class="kpi"><b style="color:var(--bad)">${low.length}</b><span>позицій нижче мінімуму</span></div>` : ""}</div>
   <div class="tw"><table><thead><tr><th>Матеріал</th><th>Склад</th><th>Відділення</th><th class="n">Залишок</th><th class="n">Сер. ціна</th><th class="n">Сума, грн</th></tr></thead><tbody>${list.map(r => `<tr${num(r.min) && num(r.qty) < num(r.min) ? ' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"' : ""}><td>${esc(r.itemName || "")}</td><td>${esc(r.whName || r.wh || "")}</td><td>${esc(r.div || "")}</td><td class="n">${fmt(num(r.qty), 2)} ${esc(r.unit || "")}</td><td class="n">${r.avgPrice ? fmt(num(r.avgPrice), 2) : "—"}</td><td class="n">${fmt0(num(r.value))}</td></tr>`).join("")}</tbody></table></div>${limit && R.length > limit ? `<p class="note"><a href="#wms" data-wmstab="aostock">Усі залишки (${R.length}) →</a></p>` : ""}<p class="note">Дані з АгроОбліку, оновлюються автоматично.</p>`;
 }
+function inRing(p, r){ let c = false; for(let i = 0, j = r.length - 1; i < r.length; j = i++){ const [xi, yi] = r[i], [xj, yj] = r[j]; if(((yi > p[1]) !== (yj > p[1])) && (p[0] < (xj - xi) * (p[1] - yi) / ((yj - yi) || 1e-12) + xi)) c = !c; } return c; }
+function fieldAt(p){ return S.fields.find(f => !f.archived && (f.contours || []).some(r => inRing(p, r))) || null; }
 /* ---------- contour tools: outward offset, corner points, vertex editing ---------- */
 function ringOffset(ring, d){ // ring closed [[lng,lat],...]; d metres outward
   if(!d) return ring; const pts = ring.slice(0, -1); if(pts.length < 3) return ring;
