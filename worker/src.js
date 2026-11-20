@@ -360,7 +360,8 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.da
     }
     if (fc && fc.daily) { const last = series.date[series.date.length - 1] || ""; const td = new Date(Date.now() + 2 * 3600e3).toISOString().slice(0, 10);
       fc.daily.time.forEach((d, i) => { if (d > last && d < td) { series.date.push(d); series.tmax.push(fc.daily.temperature_2m_max[i]); series.tmin.push(fc.daily.temperature_2m_min[i]); series.precip.push(fc.daily.precipitation_sum[i]); series.sm0.push(null); series.sm1.push(null); series.sm2.push(null); } }); }
-    return json({ current: fc && fc.current, hourly: fc && fc.hourly, daily: fc && fc.daily, series });
+    const sp = await get("https://api.open-meteo.com/v1/forecast?" + q + "&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,wind_speed_10m,wind_gusts_10m,precipitation,precipitation_probability,weather_code&wind_speed_unit=ms&forecast_days=7");
+    return json({ current: fc && fc.current, hourly: fc && fc.hourly, daily: fc && fc.daily, series, spray: sp && sp.hourly });
   }
   if (path === "/api/wms" && req.method === "GET") {
     const bbox = url.searchParams.get("bbox") || "";
