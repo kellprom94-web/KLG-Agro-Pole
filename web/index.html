@@ -562,7 +562,13 @@ function createMap(key){
     if(hit) pickField(hit.properties.fid); else if(ph) pickParcel(ph.properties.pid);
   });
   el.querySelectorAll("[data-ms]").forEach(b => b.onclick = () => setMapStyle(b.dataset.ms));
-  el.querySelector("[data-fit]").onclick = () => fitFields(M);
+  el.querySelector("[data-fit]").onclick = () => {
+    if(key !== "fieldpage") return fitFields(M);
+    M.showAll = !M.showAll; M.fields = M.showAll ? fpAllFields(M) : (M.own || M.fields);
+    const b = el.querySelector("[data-fit]"); b.textContent = M.showAll ? "Лише це поле" : "Усі поля"; b.classList.toggle("on", M.showAll);
+    updateMapData(M); fitFields(M);
+    if(M.showAll){ const n = M.fields.filter(f => f.contours && f.contours.length).length; toast(n > 1 ? `На карті ${n} полів з контурами` : "Інших полів з контурами ще немає"); }
+  };
   el.querySelector("[data-kad]").onclick = toggleKadastr; el.querySelector("[data-kad]").classList.toggle("on", showKadastr);
   el.querySelector("[data-dundo]").onclick = () => { if(M.draw){ M.draw.pts.pop(); updateDraw(M); } };
   el.querySelector("[data-dcancel]").onclick = () => stopDraw(M);
@@ -585,13 +591,15 @@ function startDraw(key, onDone){
 }
 function stopDraw(M){ M.draw = null; if(M.map.getCanvas){ M.map.getCanvas().style.cursor = ""; M.map.doubleClickZoom.enable(); } updateMapData(M); }
 function pickParcel(pid){ const p = byId("parcels", pid); if(p) parcelDialog(p); }
-function pickField(fid){ if(state.view === "fieldpage") return; openFieldTab(fid); }
+function pickField(fid){ if(state.view === "fieldpage"){ if(fid && fid !== state.fpId) location.hash = "field-" + fid; return; } openFieldTab(fid); }
+function fpAllFields(M){ const own = (M.own || [])[0]; const rest = S.fields.filter(f => !f.archived && f.contours && f.contours.length && (!own || f.id !== own.id)); return own ? [own, ...rest] : rest; }
 function attachMaps(){
   document.querySelectorAll(".mapslot").forEach(slot => {
     const key = slot.dataset.slot;
     const M = MAPS[key] || (MAPS[key] = createMap(key));
     slot.appendChild(M.el);
     const pm = pendingMaps[key] || {}; M.fields = pm.fields || []; M.parcels = pm.parcels || [];
+    if(key === "fieldpage"){ M.own = M.fields.slice(); if(M.showAll) M.fields = fpAllFields(M); const b = M.el.querySelector("[data-fit]"); if(b){ b.textContent = M.showAll ? "Лише це поле" : "Усі поля"; b.classList.toggle("on", !!M.showAll); } if(M.own[0]) state.fieldSel = M.own[0].id; }
     if(!M.ro && window.ResizeObserver && M.map.resize){ M.ro = new ResizeObserver(() => { try { M.map.resize(); } catch(e){} }); M.ro.observe(M.el); }
     requestAnimationFrame(() => { M.map.resize(); updateMapData(M); });
   });
