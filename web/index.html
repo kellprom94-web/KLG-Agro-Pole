@@ -77,7 +77,7 @@ th{font-size:12px;color:var(--muted);font-weight:500;background:#f5f7f8;position
 td.n,th.n{text-align:right;white-space:nowrap}
 tr.click{cursor:pointer}
 .tlchips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.tlchip{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:16px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}.tlchip.on{border-color:var(--c);color:var(--ink);background:color-mix(in srgb,var(--c) 12%,var(--surface))}
-.tl{position:relative;padding-left:4px}.tlmonth{font-weight:500;margin:14px 0 6px 44px;color:var(--muted);text-transform:uppercase;font-size:12px;letter-spacing:.04em}
+.tl{position:relative;padding-left:4px}.tlyear{font-size:18px;font-weight:500;margin:18px 0 4px}.tlbadge{border:1px solid;border-radius:10px;padding:0 8px;font-size:11px}.tlrows{border-collapse:collapse;margin-top:6px;font-size:13px;width:100%;max-width:640px}.tlrows td{padding:3px 8px 3px 0;border-top:1px solid var(--line)}.tlrows td.n{text-align:right;white-space:nowrap}.tlmonth{font-weight:500;margin:14px 0 6px 44px;color:var(--muted);font-size:13px}
 .tlitem{display:flex;gap:12px;position:relative;padding:4px 0 10px}.tlitem::before{content:"";position:absolute;left:15px;top:30px;bottom:-4px;width:2px;background:var(--line)}.tlitem.click{cursor:pointer}.tlitem.click:hover .tlbody{background:var(--accent-soft)}
 .tldot{flex:0 0 32px;height:32px;border-radius:50%;background:color-mix(in srgb,var(--c) 18%,var(--surface));border:2px solid var(--c);display:flex;align-items:center;justify-content:center;font-size:15px;z-index:1}
 .tlbody{flex:1;min-width:0;border:1px solid var(--line);border-left:3px solid var(--c);border-radius:4px;padding:8px 10px;background:var(--surface)}.tlhead{display:flex;gap:8px;font-size:12px;color:var(--muted)}.tldate{font-weight:500;color:var(--ink)}.tltitle{margin:2px 0}
@@ -2929,25 +2929,30 @@ function fpNdviFill(f){
 const TL_TYPES = { op: ["Агрооперації", "#2e7d32", "🚜"], wb: ["Шляхові листи", "#1976d2", "📄"], lzk: ["Списання (ЛЗК)", "#6d4c41", "📦"], scout: ["Огляди", "#8e24aa", "🔍"], note: ["Нотатки", "#00897b", "📝"], ndvi: ["Супутник NDVI", "#43a047", "🛰"], harv: ["Збирання", "#b9852a", "🌾"], wx: ["Погодні події", "#0288d1", "🌧"] };
 function fpTimelineShell(f){
   const off = state.tlOff || {};
-  return `<div class="card"><div class="filters" style="margin-bottom:6px"><b>Таймлайн поля · ${seasonLabel(state.season)}</b><span style="flex:1"></span><button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button><button class="btn sm" type="button" data-act="fieldNote" data-id="${esc(f.id)}">+ Нотатка</button></div>
+  return `<div class="card"><div class="filters" style="margin-bottom:6px"><b>Таймлайн поля</b><select id="tlScope">${opt("all", "Уся історія поля", state.tlScope || "all")}${opt("season", "Сезон " + seasonLabel(state.season), state.tlScope || "all")}</select><span style="flex:1"></span><button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button><button class="btn sm" type="button" data-act="fieldNote" data-id="${esc(f.id)}">+ Нотатка</button></div>
   <div class="tlchips">${Object.entries(TL_TYPES).map(([k, [l, c, ic]]) => `<button type="button" class="tlchip ${off[k] ? "" : "on"}" data-tltype="${k}" style="--c:${c}">${ic} ${esc(l)}</button>`).join("")}</div>
   <div id="fpTl"><p class="note">Збираю події…</p></div></div>`;
 }
 function tlEvents(f){
-  const from = seasonStart(state.season), to = state.season + "-12-31", inR = d => d && d >= from && d <= to; const E = [];
-  S.ops.filter(o => o.fieldId === f.id && Number(o.season) === state.season).forEach(o => { const d = o.factFrom || o.plannedFrom; if(!d) return; const done = opDone(o);
-    E.push({ t: "op", d, title: "№" + (o.number || "") + " " + opTitle(o), sub: `${STATUS[o.status || "planned"] || ""} · ${done ? fmt(done) + " з " : ""}${fmt(opPlanned(o))} га${(o.applications || []).length ? " · " + o.applications.map(a => nameOf("products", a.productId) + " " + a.rate + " " + a.unit + "/га").join(", ") : ""}`, attr: `data-op="${esc(o.id)}"` }); });
+  const all = (state.tlScope || "all") === "all";
+  const from = all ? "0000" : seasonStart(state.season), to = all ? "9999" : state.season + "-12-31", inR = d => d && d >= from && d <= to; const E = [];
+  S.ops.filter(o => o.fieldId === f.id && (all || Number(o.season) === state.season)).forEach(o => { const d = o.factFrom || o.plannedFrom; if(!d) return; const done = opDone(o);
+    E.push({ t: "op", d, status: o.status || "planned", kind: opGroup(o), title: "№" + (o.number || "") + " " + opTitle(o), sub: `${done ? fmt(done) + " з " : ""}${fmt(opPlanned(o))} га${(o.machineIds || []).length ? " · " + o.machineIds.map(i => nameOf("machines", i)).join(", ") : ""}`,
+      rows: (o.applications || []).map(a => { const pr = byId("products", a.productId) || {}; return [pr.type || "", pr.name || "", a.rate + " " + (a.unit || "") + "/га"]; }), attr: `data-op="${esc(o.id)}"` }); });
   if(S.aowaybills.length || S.aolzk.length){ const A = aoFieldData(f);
     const g = {}; A.wb.forEach(r => { if(!inR(r.w.date)) return; const k = r.w.date + "|" + (r.w.opName || ""); const x = g[k] ||= { d: r.w.date, op: r.w.opName || "Роботи", ha: 0, fuel: 0, tech: new Set(), drv: new Set(), ids: [] }; x.ha += r.ha; x.fuel += r.fuel; if(r.w.tractor) x.tech.add(r.w.tractor + (r.w.implement ? " + " + r.w.implement : "")); if(r.w.driver) x.drv.add(r.w.driver); x.ids.push(r.w.id); });
-    Object.values(g).forEach(x => E.push({ t: "wb", d: x.d, title: x.op, sub: `${fmt(x.ha)} га · ${fmt0(x.fuel)} л пального${x.tech.size ? " · " + [...x.tech].join(", ") : ""}${x.drv.size ? " · " + [...x.drv].join(", ") : ""}`, attr: x.ids.length === 1 ? `data-aowb="${esc(x.ids[0])}"` : "" }));
-    const z = {}; A.lz.forEach(r => { if(!inR(r.d.date)) return; const x = z[r.d.id] ||= { d: r.d.date, n: r.d.number, op: r.l.opName || r.d.opName || "", m: [] }; x.m.push(aoItemName(r.l) + " " + fmt(num(r.l.qty)) + " " + (r.l.unit || "")); });
-    Object.values(z).forEach(x => E.push({ t: "lzk", d: x.d, title: "Списання матеріалів" + (x.op ? " · " + x.op : ""), sub: (x.n ? "ЛЗК №" + x.n + ": " : "") + x.m.join(", ") }));
+    Object.values(g).forEach(x => E.push({ t: "wb", d: x.d, status: "done", kind: "Шляховий лист", title: x.op, sub: `${fmt(x.ha)} га · ${fmt0(x.fuel)} л пального${x.tech.size ? " · " + [...x.tech].join(", ") : ""}${x.drv.size ? " · " + [...x.drv].join(", ") : ""}`, attr: x.ids.length === 1 ? `data-aowb="${esc(x.ids[0])}"` : "" }));
+    const grpOf = id => { const it = S.aoitems.find(i => i.id === id); return it ? ({ czr: "ЗЗР", seed: "Насіння", fert: "Добрива", fuel: "Паливо", parts: "Запчастини" }[it.wh] || "") : ""; };
+    const z = {}; A.lz.forEach(r => { if(!inR(r.d.date)) return; const x = z[r.d.id] ||= { d: r.d.date, n: r.d.number, op: r.l.opName || r.d.opName || "", m: [] }; const ha = num(r.l.area) || num(f.area);
+      x.m.push([grpOf(r.l.itemId), aoItemName(r.l), fmt(num(r.l.qty)) + " " + (r.l.unit || "") + (ha ? " · " + fmt(num(r.l.qty) / ha, 3) + " " + (r.l.unit || "") + "/га" : "")]); });
+    Object.values(z).forEach(x => E.push({ t: "lzk", d: x.d, status: "done", kind: "Списання", title: (x.op || "Списання матеріалів") + (x.n ? " · ЛЗК №" + x.n : ""), rows: x.m }));
   }
   S.scoutreports.filter(r => r.fieldId === f.id && inR(r.date)).forEach(r => E.push({ t: "scout", d: r.date, title: "Огляд поля" + (r.stage ? " · " + r.stage : ""), sub: [(r.threats || []).map(t => (nameOf("plantthreats", t.threatId) || "") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", "), r.note, r.author].filter(Boolean).join(" · "), attr: `data-scout="${esc(r.id)}"`, photos: "scoutreports:" + r.id }));
   S.notes.filter(n => n.fieldId === f.id && inR(n.date)).forEach(n => E.push({ t: "note", d: n.date, title: n.title || n.category || "Нотатка", sub: (n.text || "").slice(0, 200), attr: `data-note="${esc(n.id)}"`, photos: "notes:" + n.id }));
-  const hv = {}; S.harvests.filter(h => h.fieldId === f.id && inR(h.date)).forEach(h => { const x = hv[h.date] ||= { kg: 0, n: 0 }; x.kg += harvNet(h); x.n++; });
-  Object.entries(hv).forEach(([d, x]) => E.push({ t: "harv", d, title: "Збирання врожаю", sub: `${x.n} рейсів · ${fmt(x.kg / 1000, 1)} т нетто${num(f.area) ? " · " + fmt(x.kg / 100 / num(f.area), 1) + " ц/га за день" : ""}` }));
-  const sw = fieldSeason(f).sowDate; if(inR(sw)) E.push({ t: "op", d: sw, title: "Сівба · " + (fieldCrop(f) || ""), sub: "Дата сівби з картки поля" });
+  const hv = {}; S.harvests.filter(h => h.fieldId === f.id && inR(h.date)).forEach(h => { const y = Number(h.season || (h.date || "").slice(0, 4)); const x = hv[y] ||= { kg: 0, n: 0, last: "" }; x.kg += harvNet(h); x.n++; if(h.date > x.last) x.last = h.date; });
+  Object.entries(hv).forEach(([y, x]) => { const ss = fieldSeason(f, Number(y)); const area = num(f.area); const yl = num(ss.yield) || (area ? x.kg / 100 / area : 0);
+    E.push({ t: "harv", d: x.last, status: "done", kind: "Збір врожаю", title: "Збір врожаю · " + [ss.crop, ss.variety].filter(Boolean).join(" "), rows: [["Зібрано врожаю", "", fmt(x.kg / 1000, 1) + " т"], ["Рейсів", "", String(x.n)], ["Урожайність", "", yl ? fmt(yl, 2) + " ц/га" : "—"]] }); });
+  Object.entries(f.seasons || {}).forEach(([y, ss]) => { if(ss.sowDate && inR(ss.sowDate)) E.push({ t: "op", d: ss.sowDate, status: "done", kind: "Посів", title: [ss.crop, ss.variety].filter(Boolean).join(" ") || "Посів", sub: "Дата сівби з картки поля" }); });
   return E;
 }
 async function fpTimelineFill(f){
@@ -2955,9 +2960,13 @@ async function fpTimelineFill(f){
   const draw = () => {
     const off = state.tlOff || {}; const L = E.filter(e => !off[e.t]).sort((a, b) => b.d.localeCompare(a.d) || a.t.localeCompare(b.t));
     if(!L.length){ box.innerHTML = `<div class="empty">Подій за сезон ще немає.</div>`; return; }
-    let month = ""; box.innerHTML = `<div class="tl">` + L.map(e => { const [l, c, ic] = TL_TYPES[e.t]; const mo = e.d.slice(0, 7); let h = "";
-      if(mo !== month){ month = mo; h += `<div class="tlmonth">${["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"][Number(mo.slice(5)) - 1]} ${mo.slice(0, 4)}</div>`; }
-      return h + `<div class="tlitem ${e.attr ? "click" : ""}" ${e.attr || ""} style="--c:${c}"><div class="tldot">${ic}</div><div class="tlbody"><div class="tlhead"><span class="tldate">${fdate(e.d)}</span><span class="tltype">${esc(l)}</span></div><div class="tltitle">${e.html || esc(e.title)}</div>${e.sub ? `<div class="note">${esc(e.sub)}</div>` : ""}${e.photos ? `<div class="tlph" data-tlphotos="${esc(e.photos)}"></div>` : ""}</div></div>`; }).join("") + `</div>`;
+    const MON = ["січ","лют","бер","квіт","трав","черв","лип","серп","вер","жовт","лист","груд"];
+    const SB = { done: ["Зроблено", "var(--good)"], progress: ["В процесі", "var(--info)"], planned: ["Заплановано", "var(--muted)"], cancel: ["Скасовано", "var(--bad)"] };
+    let year = "", day = ""; box.innerHTML = `<div class="tl">` + L.map(e => { const [l, c, ic] = TL_TYPES[e.t]; let h = "";
+      if(e.d.slice(0, 4) !== year){ year = e.d.slice(0, 4); day = ""; h += `<div class="tlyear">${year} рік</div>`; }
+      if(e.d !== day){ day = e.d; h += `<div class="tlmonth">${Number(e.d.slice(8, 10))} ${MON[Number(e.d.slice(5, 7)) - 1]} ${e.d.slice(0, 4)} р.</div>`; }
+      const sb = e.status && SB[e.status];
+      return h + `<div class="tlitem ${e.attr ? "click" : ""}" ${e.attr || ""} style="--c:${c}"><div class="tldot">${ic}</div><div class="tlbody"><div class="tlhead">${sb ? `<span class="tlbadge" style="color:${sb[1]};border-color:${sb[1]}">${sb[0]}</span>` : ""}<span class="tltype">${esc(e.kind || l)}</span></div><div class="tltitle">${e.html || esc(e.title)}</div>${e.sub ? `<div class="note">${esc(e.sub)}</div>` : ""}${(e.rows || []).length ? `<table class="tlrows"><tbody>${e.rows.map(r => `<tr><td class="muted">${esc(r[0] || "")}</td><td>${esc(r[1] || "")}</td><td class="n">${esc(r[2] || "")}</td></tr>`).join("")}</tbody></table>` : ""}${e.photos ? `<div class="tlph" data-tlphotos="${esc(e.photos)}"></div>` : ""}</div></div>`; }).join("") + `</div>`;
     box.querySelectorAll("[data-tlphotos]").forEach(async el => { const [col, id] = el.dataset.tlphotos.split(":"); try { const j = await api("/files?col=" + col + "&id=" + encodeURIComponent(id)); el.innerHTML = (j.files || []).filter(x => /^image\//.test(x.type)).slice(0, 12).map(x => `<a href="/api/files/${esc(x.id)}" target="_blank" rel="noopener" onclick="event.stopPropagation()"><img src="/api/files/${esc(x.id)}" alt="${esc(x.name)}" loading="lazy"></a>`).join(""); } catch(e){} });
   };
   draw(); box.__redraw = draw;
@@ -3804,6 +3813,7 @@ main.addEventListener("input", e => {
 });
 main.addEventListener("change", e => {
   if(e.target.id === "aoSeason"){ state.aoSeason = e.target.value; render(); return; }
+  if(e.target.id === "tlScope"){ state.tlScope = e.target.value; const f = byId("fields", state.fpId); if(f) fpTimelineFill(f); return; }
   if(e.target.id === "aoStDiv"){ state.aoStDiv = e.target.value; render(); return; }
   if(e.target.id === "aoStWh"){ state.aoStWh = e.target.value; render(); return; }
   if(e.target.dataset && e.target.dataset.aonames){ const f = byId("fields", e.target.dataset.aonames); if(f){ save("fields", Object.assign({}, f, { aoNames: e.target.value.trim() })).then(() => toast("Збережено")); } return; }
