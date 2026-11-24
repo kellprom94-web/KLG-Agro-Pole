@@ -2992,9 +2992,11 @@ async function loadRain(){
   if(rainBusy) return rainBusy;
   return rainBusy = (async () => {
     const F = S.fields.filter(f => !f.archived && fieldCenter(f)); const key = {}, pts = [];
+    if(!F.length) return { rows: [], noContour: 0, empty: true };
     F.forEach(f => { const c = fieldCenter(f); const k = c[1].toFixed(2) + "," + c[0].toFixed(2); if(!(k in key)){ key[k] = pts.length; pts.push([c[1], c[0]]); } f.__rk = key[k]; });
     const j = await fetch("/api/rain", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pts }) }).then(r => r.ok ? r.json() : Promise.reject(r.status));
-    rainData = { rows: F.map(f => Object.assign({ f }, j.points[f.__rk] || {})), noContour: S.fields.filter(f => !f.archived && !fieldCenter(f)).length }; rainT = Date.now(); return rainData;
+    const R = { rows: F.map(f => Object.assign({ f }, j.points[f.__rk] || {})), noContour: S.fields.filter(f => !f.archived && !fieldCenter(f)).length };
+    if(F.length){ rainData = R; rainT = Date.now(); } return R;
   })().finally(() => { rainBusy = null; });
 }
 function rainCell(v){ v = num(v); const c = v >= 20 ? "#0d47a1" : v >= 10 ? "#1565c0" : v >= 5 ? "#1e88e5" : v >= 1 ? "#64b5f6" : ""; return `<td class="n" style="${c ? `color:${v >= 5 ? "#fff" : "#0d47a1"};background:${c}` : "color:var(--muted)"}">${v >= 0.1 ? fmt(v, 1) : "0"}</td>`; }
@@ -3010,7 +3012,7 @@ function rainTableHtml(R, limit){
 }
 async function fillDashRain(){
   const box = document.getElementById("dashRain"); if(!box) return;
-  try { const R = await loadRain(); const b = document.getElementById("dashRain"); if(b) b.innerHTML = rainTableHtml(R, state.rainAll ? 0 : 12); }
+  try { const R = await loadRain(); const b = document.getElementById("dashRain"); if(b) b.innerHTML = R.empty ? `<p class="note">Завантажую…</p>` : rainTableHtml(R, state.rainAll ? 0 : 12); }
   catch(e){ box.innerHTML = `<p class="note">Не вдалося отримати опади. Спробуйте пізніше.</p>`; }
 }
 document.addEventListener("change", e => { if(e.target.id === "rainDiv"){ state.rainDiv = e.target.value; fillDashRain(); } });
