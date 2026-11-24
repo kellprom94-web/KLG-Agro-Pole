@@ -779,6 +779,7 @@ function viewDash(){
     </div>
   </div>
   <div class="grid g2" style="margin-top:16px">
+    <div class="card"><h2>Опади по полях: вчора і сьогодні</h2><div id="dashRain"><p class="note">Завантажую…</p></div></div>
     <div class="card"><h2>Останні операції техніки</h2>${recentMachineOpsHtml(10)}</div>
     <div class="card"><h2>Склад ЗЗР, насіння, добрива · АгроОблік</h2>${aoStockHtml(8, true)}</div>
     <div class="card"><h2>Прогрес агрооперацій ${seasonLabel(state.season)}</h2>${opsProgress(ops)}</div>
@@ -2984,6 +2985,36 @@ document.addEventListener("click", e => {
   const c = e.target.closest("[data-tltype]"); if(c){ const k = c.dataset.tltype; state.tlOff = Object.assign({}, state.tlOff || {}); state.tlOff[k] = !state.tlOff[k]; c.classList.toggle("on", !state.tlOff[k]); const b = document.getElementById("fpTl"); if(b && b.__redraw) b.__redraw(); return; }
   const n = e.target.closest("[data-tlndvi]"); if(n){ const f = byId("fields", state.fpId); const dt = n.dataset.tlndvi; state.fpTab = "summary"; history.replaceState(null, "", "#field-" + state.fpId); render(); window.scrollTo(0, 0); if(f) setTimeout(() => showNdviImage(f, dt), 600); }
 });
+/* ---------- rainfall yesterday / today across fields ---------- */
+let rainData = null, rainT = 0, rainBusy = null;
+async function loadRain(){
+  if(rainData && Date.now() - rainT < 15 * 6e4) return rainData;
+  if(rainBusy) return rainBusy;
+  return rainBusy = (async () => {
+    const F = S.fields.filter(f => !f.archived && fieldCenter(f)); const key = {}, pts = [];
+    F.forEach(f => { const c = fieldCenter(f); const k = c[1].toFixed(2) + "," + c[0].toFixed(2); if(!(k in key)){ key[k] = pts.length; pts.push([c[1], c[0]]); } f.__rk = key[k]; });
+    const j = await fetch("/api/rain", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pts }) }).then(r => r.ok ? r.json() : Promise.reject(r.status));
+    rainData = { rows: F.map(f => Object.assign({ f }, j.points[f.__rk] || {})), noContour: S.fields.filter(f => !f.archived && !fieldCenter(f)).length }; rainT = Date.now(); return rainData;
+  })().finally(() => { rainBusy = null; });
+}
+function rainCell(v){ v = num(v); const c = v >= 20 ? "#0d47a1" : v >= 10 ? "#1565c0" : v >= 5 ? "#1e88e5" : v >= 1 ? "#64b5f6" : ""; return `<td class="n" style="${c ? `color:${v >= 5 ? "#fff" : "#0d47a1"};background:${c}` : "color:var(--muted)"}">${v >= 0.1 ? fmt(v, 1) : "0"}</td>`; }
+function rainTableHtml(R, limit){
+  const g = state.rainDiv || ""; const groups = [...new Set(R.rows.map(r => (r.f.group || "")).filter(Boolean))].sort();
+  let rows = R.rows.filter(r => !g || (r.f.group || "") === g).sort((a, b) => (b.yday + b.today) - (a.yday + a.today) || String(a.f.name).localeCompare(b.f.name, "uk"));
+  const avg = k => rows.length ? sum(rows, r => num(r[k]) * num(r.f.area)) / (sum(rows, r => num(r.f.area)) || 1) : 0;
+  const now = (R.rows[0] || {}).now || ""; const shown = limit ? rows.slice(0, limit) : rows;
+  return `<div class="filters"><select id="rainDiv">${opt("", "Усі відділення", g)}${groups.map(x => opt(x, x, g)).join("")}</select><span class="note">Сьогодні — до ${now.slice(11, 13) || "—"}:00. Середнє зважене за площею: вчора <b>${fmt(avg("yday"), 1)}</b> мм, сьогодні <b>${fmt(avg("today"), 1)}</b> мм.</span></div>
+  <div class="tw"><table><thead><tr><th>Поле</th><th>Відділення</th><th class="n">Вчора, мм</th><th class="n">Сьогодні, мм</th><th class="n">Ще до кінця дня (прогноз)</th><th class="n">Завтра (прогноз)</th><th class="n">За 7 днів, мм</th></tr></thead><tbody>${shown.map(r => `<tr><td><a href="#field-${esc(r.f.id)}">${esc(r.f.name)}</a></td><td>${esc((r.f.group || "") || "—")}</td>${rainCell(r.yday)}${rainCell(r.today)}<td class="n">${r.todayFc >= 0.1 ? fmt(r.todayFc, 1) : "—"}</td><td class="n">${r.tomorrow >= 0.1 ? fmt(r.tomorrow, 1) : "—"}</td>${rainCell(r.d7)}</tr>`).join("")}</tbody></table></div>
+  ${limit && rows.length > limit ? `<button class="btn sm" type="button" data-act="rainAll" style="margin-top:8px">Показати всі поля (${rows.length})</button>` : ""}
+  <p class="note">Дані Open-Meteo (модельна оцінка за даними метеостанцій і радарів) для центру кожного поля.${R.noContour ? ` Полів без контуру — ${R.noContour}, для них опади не рахуються.` : ""}</p>`;
+}
+async function fillDashRain(){
+  const box = document.getElementById("dashRain"); if(!box) return;
+  try { const R = await loadRain(); const b = document.getElementById("dashRain"); if(b) b.innerHTML = rainTableHtml(R, state.rainAll ? 0 : 12); }
+  catch(e){ box.innerHTML = `<p class="note">Не вдалося отримати опади. Спробуйте пізніше.</p>`; }
+}
+document.addEventListener("change", e => { if(e.target.id === "rainDiv"){ state.rainDiv = e.target.value; fillDashRain(); } });
+document.addEventListener("click", e => { const a = e.target.closest('[data-act="rainAll"]'); if(a){ state.rainAll = true; fillDashRain(); } });
 /* ---------- spraying windows by weather (hourly Open-Meteo, 7 days) ---------- */
 function wetBulb(t, rh){ // Stull 2011, °C
   return t * Math.atan(0.151977 * Math.sqrt(rh + 8.313659)) + Math.atan(t + rh) - Math.atan(rh - 1.676331) + 0.00391838 * Math.pow(rh, 1.5) * Math.atan(0.023101 * rh) - 4.686035; }
@@ -3042,7 +3073,7 @@ function fpSummaryHtml(f, s, parcels){
     <h2 style="margin-top:14px">Площа</h2><dl class="dl"><dt>Оброблювальна</dt><dd>${fmt(num(f.area))} га</dd><dt>Офіційна</dt><dd>${f.officialArea ? fmt(num(f.officialArea)) + " га" : "—"}</dd><dt>Розрахункова</dt><dd>${f.calcArea ? fmt(num(f.calcArea)) + " га" : "—"}</dd><dt>Земельних ділянок</dt><dd>${parcels.length}${parcels.length ? " · " + fmt(sum(parcels, p => p.area), 2) + " га" : ""}</dd></dl></div>`;
   const mid = `<div class="grid" style="align-content:start;gap:12px"><div class="card" id="fpNdviVal">${f.contours ? `<p class="note">Завантажую NDVI…</p>` : `<p class="note">Потрібен контур поля.</p>`}</div>
     <div class="card"><h2>Сума ефективних температур, °C</h2><div class="gdd" id="fpGdd"><p class="note">Завантажую…</p></div></div>
-    <div class="card"><h2>Погода зараз</h2><div id="fpNow"><p class="note">${f.contours ? "Завантажую…" : "Потрібен контур поля."}</p></div></div></div>`;
+    <div class="card"><h2>Погода зараз</h2><div class="kpi" id="fpRain" style="margin-bottom:8px"><b>…</b><span>мм опадів вчора / сьогодні</span></div><div id="fpNow"><p class="note">${f.contours ? "Завантажую…" : "Потрібен контур поля."}</p></div></div></div>`;
   const map = `<div class="card fpmapcard"><h2>Супутникові знімки</h2>${mapHtml("fieldpage", [f], [...parcels, ...aoPlotsOfField(f)])}</div>`;
   const charts = `<div class="fpcharts"><div class="card"><h2>Вегетація (NDVI)</h2><div id="fpVeg"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Опади</h2><div id="fpRain"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Температура</h2><div id="fpTemp"><p class="note">Завантажую…</p></div></div><div class="card"><h2>Вологість ґрунту, %</h2><div id="fpSoil"><p class="note">Завантажую…</p></div></div></div>`;
   const reports = `<div class="card"><h2>Останні звіти оглядів</h2>${rs.length ? rs.map(r => `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><a href="#" class="linkish" data-scout="${esc(r.id)}" style="font-size:15px;text-decoration:none">${fdate(r.date)}</a>${r.stage ? ` · <span class="muted">${esc(r.stage)}</span>` : ""}<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0" data-scoutphotos="${esc(r.id)}"></div>${(r.threats || []).length ? `<div class="note">${(r.threats || []).map(t => esc(nameOf("plantthreats", t.threatId) || "") + (t.severity ? " " + fmt0(num(t.severity)) + "%" : "")).join(", ")}</div>` : ""}${r.note ? `<div>${esc(r.note)}</div>` : ""}<div class="note">${esc(r.author || r.updatedBy || "")}</div></div>`).join("") : `<div class="empty">Оглядів ще немає. <button class="btn sm" type="button" data-act="scoutField" data-id="${esc(f.id)}">+ Огляд</button></div>`}</div>`;
@@ -3051,6 +3082,8 @@ function fpSummaryHtml(f, s, parcels){
   return sub + `<div class="fprow1">${info}${mid}${map}</div>` + charts + `<div class="grid g2" style="margin-top:16px">${reports}${right}</div>`;
 }
 function fpAfterRender(){
+  if(document.getElementById("dashRain")) fillDashRain();
+  { const el = document.getElementById("fpRain"); if(el){ const f = byId("fields", state.fpId); if(f) loadRain().then(R => { const r = R.rows.find(x => x.f.id === f.id); const b = document.getElementById("fpRain"); if(b && r) b.innerHTML = `<b>${fmt(r.yday, 1)} / ${fmt(r.today, 1)}</b><span>мм опадів вчора / сьогодні · за 7 днів ${fmt(r.d7, 1)}</span>`; }).catch(() => {}); } }
   if(state.view === "fieldpage" && state.fpTab === "timeline"){ const f = byId("fields", state.fpId); if(f) fpTimelineFill(f); return; }
   if(state.view !== "fieldpage" || (state.fpTab || "summary") !== "summary") return;
   const f = byId("fields", state.fpId); if(!f) return;

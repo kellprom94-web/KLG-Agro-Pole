@@ -343,6 +343,27 @@ function evaluatePixel(s){const bad=[0,1,3,8,9,10,11].indexOf(s.SCL)>=0;if(!s.da
     }
     return json({ forecast, history });
   }
+  if (path === "/api/rain" && req.method === "POST") {
+    // rainfall per point: yesterday, today so far, rest of today (forecast), tomorrow, last 7 days — many points per Open-Meteo call
+    const b = await req.json().catch(() => ({})); const pts = (b.pts || []).filter((p) => Array.isArray(p) && p[0] > 40 && p[0] < 55 && p[1] > 20 && p[1] < 45).slice(0, 400);
+    const out = [];
+    for (let i = 0; i < pts.length; i += 80) {
+      const ch = pts.slice(i, i + 80);
+      const u = "https://api.open-meteo.com/v1/forecast?latitude=" + ch.map((p) => p[0].toFixed(3)).join(",") + "&longitude=" + ch.map((p) => p[1].toFixed(3)).join(",") + "&timezone=Europe%2FKyiv&current=precipitation&hourly=precipitation&past_days=7&forecast_days=2";
+      const r = await fetch(u, { cf: { cacheTtl: 900, cacheEverything: true } }); if (!r.ok) return json({ error: "open-meteo " + r.status }, 502);
+      let j = await r.json(); if (!Array.isArray(j)) j = [j];
+      for (const x of j) {
+        const now = ((x.current || {}).time || "").slice(0, 13); const today = now.slice(0, 10);
+        const yd = new Date(Date.parse(today + "T12:00:00Z") - 864e5).toISOString().slice(0, 10), tm = new Date(Date.parse(today + "T12:00:00Z") + 864e5).toISOString().slice(0, 10);
+        const d7 = new Date(Date.parse(today + "T12:00:00Z") - 7 * 864e5).toISOString().slice(0, 10);
+        const o = { yday: 0, today: 0, todayFc: 0, tomorrow: 0, d7: 0, now };
+        (x.hourly.time || []).forEach((t, k) => { const v = Number(x.hourly.precipitation[k]) || 0; const d = t.slice(0, 10);
+          if (d === yd) o.yday += v; if (d === today) { if (t.slice(0, 13) <= now) o.today += v; else o.todayFc += v; } if (d === tm) o.tomorrow += v; if (d > d7 && t.slice(0, 13) <= now) o.d7 += v; });
+        out.push(o);
+      }
+    }
+    return json({ points: out });
+  }
   if (path === "/api/fieldwx" && req.method === "GET") {
     const lat = Number(url.searchParams.get("lat")), lon = Number(url.searchParams.get("lon"));
     if (!(lat > 40 && lat < 55 && lon > 20 && lon < 45)) return json({ error: "bad coordinates" }, 400);
